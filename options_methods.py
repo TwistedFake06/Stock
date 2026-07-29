@@ -269,42 +269,94 @@ def composite_method_score(methods: list[MethodScore]) -> float:
     return round(num / den, 1)
 
 
+def _half_buyback_price(idea: Any) -> float | None:
+    """
+    50% 最大利润时的平仓目标价（$/股）。
+    信用：开仓收 C → 买回约 C×0.5。
+    借方：开仓付 D → 卖出约 D + 0.5×(W−D)。
+    """
+    existing = getattr(idea, "metric_half_buyback", None)
+    if existing is not None:
+        try:
+            return float(existing)
+        except (TypeError, ValueError):
+            pass
+    if idea.net_credit is not None:
+        c = float(idea.net_credit)
+        return round(c * 0.5, 2) if c > 0 else None
+    if idea.net_debit is not None:
+        d = float(idea.net_debit)
+        w = float(getattr(idea, "width", 0) or 0)
+        if d > 0 and w > d:
+            return round(d + 0.5 * (w - d), 2)
+        half_ps = float(idea.max_profit or 0) / 200.0
+        return round(d + half_ps, 2) if d > 0 else None
+    return None
+
+
 def build_ops_plan(idea: Any) -> OpsPlan:
     """热门操作方式：50% 止盈、接近短腿风控等。"""
     is_credit = idea.net_credit is not None
     half = float(idea.max_profit) * 0.5
     be = idea.breakevens[0] if idea.breakevens else None
+    bb = _half_buyback_price(idea)
 
     if is_credit:
         entry = (
             f"今天卖出这组价差，目标大约收到 ${idea.net_credit:.2f}/股"
-            f"（一张约 ${idea.net_credit * 100:.0f}），用限价单，别市价乱扫。"
+            f"（一张约 ${idea.net_credit * 100:.0f}），"
+            "按自然成交估：卖腿用买价(bid)、买腿用卖价(ask)；限价单，别市价乱扫。"
         )
-        manage = (
-            f"很多人会在赚到最大利润约一半（约 ${half:.0f}/张）时提前买回离场，"
-            "不必拿到到期——时间衰减对卖方有利，但别贪。"
-        )
-        exits = [
-            f"止盈：浮盈达到约 ${half:.0f}/张（最大利润的一半）可买回",
-            f"到期：若股票价仍在有利一侧，可拿到接近最大利润约 ${idea.max_profit:.0f}/张",
-            f"风控：浮亏变大或股价靠近危险侧时考虑提前买回；最多亏约 ${idea.max_loss:.0f}/张",
-        ]
+        if bb is not None:
+            manage = (
+                f"很多人会在赚到最大利润约一半（约 ${half:.0f}/张）时提前买回——"
+                f"目标把整组价差买回约 ${bb:.2f}/股（当初收 ${idea.net_credit:.2f}，"
+                f"买回付 {bb:.2f}，净赚约 ${float(idea.net_credit) - bb:.2f}/股）。"
+                "不必拿到到期——时间衰减对卖方有利，但别贪。"
+            )
+            exits = [
+                f"止盈：价差买回约 ${bb:.2f}/股 ≈ 赚一半（约 ${half:.0f}/张）",
+                f"到期：若股票价仍在有利一侧，可拿到接近最大利润约 ${idea.max_profit:.0f}/张",
+                f"风控：浮亏变大或股价靠近危险侧时考虑提前买回；最多亏约 ${idea.max_loss:.0f}/张",
+            ]
+        else:
+            manage = (
+                f"很多人会在赚到最大利润约一半（约 ${half:.0f}/张）时提前买回离场，"
+                "不必拿到到期——时间衰减对卖方有利，但别贪。"
+            )
+            exits = [
+                f"止盈：浮盈达到约 ${half:.0f}/张（最大利润的一半）可买回",
+                f"到期：若股票价仍在有利一侧，可拿到接近最大利润约 ${idea.max_profit:.0f}/张",
+                f"风控：浮亏变大或股价靠近危险侧时考虑提前买回；最多亏约 ${idea.max_loss:.0f}/张",
+            ]
         if be is not None:
             exits.append(f"记住不赚不亏价大约 {be:.2f}（到期结算参考）")
     else:
         entry = (
             f"今天买进这组价差，大约付 ${idea.net_debit:.2f}/股"
-            f"（一张约 ${idea.net_debit * 100:.0f}），限价单。"
+            f"（一张约 ${idea.net_debit * 100:.0f}），"
+            "买腿按卖价(ask)、卖腿按买价(bid)；限价单。"
         )
-        manage = (
-            "买进价差靠方向；很多人在趋势走顺、浮盈不错时分批卖出，"
-            "或设好最多亏完权利金的心理准备。"
-        )
-        exits = [
-            f"止盈：接近最大利润 ${idea.max_profit:.0f}/张 附近可分批卖出",
-            f"止损：最多就是亏掉成本约 ${idea.max_loss:.0f}/张（别再加仓摊平）",
-            "时间：越接近到期，方向不对会亏得快，别拖",
-        ]
+        if bb is not None:
+            manage = (
+                f"方向走顺时，可在价差卖出价约 ${bb:.2f}/股 附近先落袋一半利润"
+                f"（约 ${half:.0f}/张），或设好最多亏完权利金的心理准备。"
+            )
+            exits = [
+                f"止盈：价差卖出约 ${bb:.2f}/股 ≈ 赚一半（约 ${half:.0f}/张）",
+                f"止损：最多就是亏掉成本约 ${idea.max_loss:.0f}/张（别再加仓摊平）",
+                "时间：越接近到期，方向不对会亏得快，别拖",
+            ]
+        else:
+            manage = (
+                "买进价差靠方向；很多人在趋势走顺、浮盈不错时分批卖出，"
+                "或设好最多亏完权利金的心理准备。"
+            )
+            exits = [
+                f"止盈：接近最大利润 ${idea.max_profit:.0f}/张 附近可分批卖出",
+                f"止损：最多就是亏掉成本约 ${idea.max_loss:.0f}/张（别再加仓摊平）",
+                "时间：越接近到期，方向不对会亏得快，别拖",
+            ]
         if be is not None:
             exits.append(f"不赚不亏价大约 {be:.2f}")
 
@@ -316,14 +368,17 @@ def enrich_idea_with_methods(idea: Any, spot: float, dte: int) -> Any:
     methods = score_popular_methods(idea, spot, dte)
     idea.method_scores = methods
     idea.method_composite = composite_method_score(methods)
-    idea.ops_plan = build_ops_plan(idea)
-    # 权利金/宽度、ROC 明文
+    # 权利金/宽度、ROC、50% 买回价
     fill = _fill_ratio(idea)
     roc = _roc(idea)
     idea.metric_credit_width = round(fill * 100, 1) if fill is not None else None
     idea.metric_roc = round(roc, 2) if roc is not None else None
     half = float(idea.max_profit) * 0.5
     idea.metric_half_profit = round(half, 1)
+    bb = _half_buyback_price(idea)
+    if bb is not None:
+        idea.metric_half_buyback = bb
+    idea.ops_plan = build_ops_plan(idea)
     return idea
 
 

@@ -113,14 +113,14 @@ cd /d C:\\Users\\Eddie\\Python\\Stock
 WATCHLIST_FILE = Path(__file__).parent / "watchlist.json"
 
 st.set_page_config(
-    page_title="股票分析助手",
-    page_icon="📈",
+    page_title="期权价差 · 股票分析",
+    page_icon="📊",
     layout="wide",
-    initial_sidebar_state="collapsed",  # better for iPhone; open menu when needed
+    initial_sidebar_state="collapsed",  # better for iPhone
     menu_items={
         "Get Help": None,
         "Report a bug": None,
-        "About": "股票 / 期权价差分析 · 手机浏览器可用 · Streamlit Cloud",
+        "About": "期权价差首页 · 手机深色布局 · Streamlit Cloud",
     },
 )
 
@@ -281,22 +281,23 @@ if "symbol" not in st.session_state:
 
 # ---- sidebar ----
 with st.sidebar:
-    st.markdown("### 📈 股票分析")
-    st.caption("手机点左上角 « 打开菜单 · Yahoo 数据")
+    st.markdown("### 📊 期权 · 股票")
+    st.caption("首页 = 期权价差 · 点左上角打开菜单")
 
-    # selectbox is easier than long radio on iPhone
+    # 期权价差为首页（列表第一项）
     page = st.selectbox(
         "功能页面",
         [
+            "期权价差",
             "行情看板",
             "多空分析",
             "入场与目标价",
-            "期权价差",
             "综合分析",
             "技术分析",
             "多股对比",
             "自选股",
         ],
+        index=0,
     )
 
     st.divider()
@@ -1156,12 +1157,28 @@ elif page == "入场与目标价":
         )
 
 
-# ===================== 期权价差（白话版） =====================
+# ===================== 期权价差（首页 · beauty layout） =====================
 elif page == "期权价差":
-    st.header("期权价差 · 卖出 / 买回")
-    st.caption(
-        "用白话看：今天**卖出一组价差先收钱**（或买进先付钱），"
-        "**几天后买回（或卖出）平仓**，看赚还是蚀。只做 QQQ / VOO / SPY 等大盘 ETF。"
+    st.markdown(
+        """
+        <div class="hero-wrap">
+          <p class="hero-kicker">Home · Vertical Spread</p>
+          <p class="hero-title">期权价差</p>
+          <p class="hero-desc">
+            今天<strong style="color:#90caf9">卖出</strong>一组价差先收钱
+            （或买进先付钱）→
+            <strong style="color:#d2a8ff">几天后买回</strong>平仓。
+            只做 QQQ / VOO / SPY 等大盘 ETF。
+          </p>
+          <div class="pill-row">
+            <span class="pill pill-blue">卖出 / 买回</span>
+            <span class="pill pill-purple">高胜率规则</span>
+            <span class="pill pill-green">流动性</span>
+            <span class="pill pill-amber">不用行权</span>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
     opt_default = options_symbol(symbol)
@@ -1171,23 +1188,27 @@ elif page == "期权价差":
     c1, c2, c3 = st.columns([2, 1, 1])
     with c1:
         etf_list = sorted(INDEX_ETF_WHITELIST.keys())
+        for hot in ("QQQ", "SPY", "VOO"):
+            if hot in etf_list:
+                etf_list.remove(hot)
+                etf_list.insert(0, hot)
         idx = etf_list.index(opt_default) if opt_default in etf_list else 0
         opt_sym = st.selectbox(
-            "选哪只 ETF",
+            "ETF",
             etf_list,
             index=idx,
-            format_func=lambda s: f"{s} — {INDEX_ETF_WHITELIST[s]}",
+            format_func=lambda s: f"{s} · {INDEX_ETF_WHITELIST[s]}",
         )
     with c2:
         target_dte = st.select_slider(
-            "打算拿多久（大约几天到期）",
+            "大约几天到期",
             options=[14, 21, 30, 45, 60],
             value=30,
         )
     with c3:
-        width_mode = st.selectbox("两腿价差宽度", ["自动", "1", "2", "5", "10"], index=0)
+        width_mode = st.selectbox("宽度", ["自动", "1", "2", "5", "10"], index=0)
 
-    with st.spinner("正在判断方向、找适合的价差..."):
+    with st.spinner("扫描方向与价差…"):
         hist_opt = fetch_history(opt_sym, period="6mo", interval="1d")
         width_val = None if width_mode == "自动" else float(width_mode)
         opt_rep = analyze_options_spreads(
@@ -1202,40 +1223,48 @@ elif page == "期权价差":
         st.write(", ".join(f"`{k}`" for k in sorted(INDEX_ETF_WHITELIST)))
     else:
         d = opt_rep.direction
-        dir_color = {
-            "看多": "#ef5350",
-            "看空": "#26a69a",
-            "中性": "#78909c",
-        }.get(d.direction if d else "中性", "#78909c")
+        dir_pill = {
+            "看多": "pill-red",
+            "看空": "pill-green",
+            "中性": "pill",
+        }.get(d.direction if d else "中性", "pill")
 
+        # 盘后 / 报价质量提示
+        qw = getattr(opt_rep, "quote_warning", "") or ""
+        if qw:
+            st.warning(qw)
+        pn = getattr(opt_rep, "pricing_note", "") or ""
+        fo = getattr(opt_rep, "filtered_out", 0) or 0
+        if pn or fo:
+            cap_bits = []
+            if pn:
+                cap_bits.append(pn)
+            if fo:
+                cap_bits.append(f"硬过滤剔除 {fo} 个（流动性 / 权利金宽度不合规）")
+            st.caption(" · ".join(cap_bits))
+
+        iv_txt = f"{opt_rep.iv_atm * 100:.0f}%" if opt_rep.iv_atm is not None else "—"
         st.markdown(
             f"""
-            <div class="bias-card">
-              <p class="bias-title" style="color:{dir_color};">
-                现在更像：{(d.direction if d else '—')}
-                <span style="font-size:1.05rem;color:#90a4ae;font-weight:500;">
-                  · {(d.strength if d else '—')} · 分数 {(f'{d.score:+.0f}' if d else '—')}
-                </span>
-              </p>
-              <p class="bias-sub">{(d.style_hint if d else '')}</p>
+            <div class="glass-card">
+              <p class="section-label">Market snapshot</p>
+              <div class="pill-row">
+                <span class="pill pill-blue">{opt_sym} · {opt_rep.spot:.2f}</span>
+                <span class="pill {dir_pill}">方向 {(d.direction if d else '—')}</span>
+                <span class="pill">{(d.strength if d else '—')} · {(f'{d.score:+.0f}' if d else '')}</span>
+                <span class="pill">到期 {opt_rep.selected_expiry or '—'}</span>
+                <span class="pill">还剩 {opt_rep.dte if opt_rep.dte is not None else '—'} 天</span>
+                <span class="pill pill-amber">波动 ~{iv_txt}</span>
+              </div>
+              <p class="mini-note">{(d.style_hint if d else '')}</p>
             </div>
             """,
             unsafe_allow_html=True,
         )
-
         if d and d.reasons:
-            with st.expander("为什么这样判断（可展开）", expanded=False):
+            with st.expander("方向依据", expanded=False):
                 for r in d.reasons:
                     st.markdown(f"- {r}")
-
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("现在股价", f"{opt_rep.spot:.2f}")
-        m2.metric("期权到期日", opt_rep.selected_expiry or "—")
-        m3.metric("还剩几天", f"{opt_rep.dte}" if opt_rep.dte is not None else "—")
-        m4.metric(
-            "波动大约",
-            f"{opt_rep.iv_atm * 100:.0f}%" if opt_rep.iv_atm is not None else "—",
-        )
 
         if not opt_rep.ideas or not opt_rep.best:
             st.warning("暂时算不出可用价差（网络或盘后报价问题）。")
@@ -1244,163 +1273,217 @@ elif page == "期权价差":
             hi_al = getattr(opt_rep, "best_winrate_aligned", None)
             pb = getattr(opt_rep, "best_playbook", None) or opt_rep.best
             pb_wr = getattr(opt_rep, "best_playbook_wr", None) or hi_al or hi
-            best = pb  # 默认展示实战推荐
+            best = pb
             is_credit = best.net_credit is not None
-            do_word = "卖出价差（先收钱）" if is_credit else "买进价差（先付钱）"
-            close_word = "几天后买回平仓" if is_credit else "几天后卖出平仓"
+            do_word = "卖出价差 · 先收钱" if is_credit else "买进价差 · 先付钱"
+            close_word = "几天后买回" if is_credit else "几天后卖出"
 
-            st.success(
-                f"建议：先 **{do_word}**，再 **{close_word}**。"
-                f"方向：{d.direction if d else '—'}。"
-            )
-
-            # ---- 参考常见策略 ----
-            st.subheader("① 按常见做法推荐")
+            wr_p = getattr(best, "win_rate_profit", None) or getattr(best, "pop_est", None)
+            liq_lab = getattr(best, "liquidity_label", "") or "—"
             style = getattr(best, "playbook_style", "") or "实战扫描"
             plain = getattr(best, "playbook_plain", "") or ""
             src = getattr(best, "playbook_source", "") or ""
             fit = getattr(best, "playbook_fit", None)
-            st.markdown(f"**像哪种常见做法：** {style}")
-            if plain:
-                st.markdown(f"**白话：** {plain}")
-            if src:
-                st.caption(f"规则参考：{src}（教学归纳，不是荐股）")
-            if fit is not None:
-                st.caption(f"和该做法的贴合程度大约 {fit:.0f}/100")
-
-            for line in plain_spread_steps(best):
-                st.markdown(line)
-
-            wr_p = getattr(best, "win_rate_profit", None) or getattr(best, "pop_est", None)
-            wr_m = getattr(best, "win_rate_max", None)
-
-            b1, b2, b3, b4, b5, b6 = st.columns(6)
-            if is_credit:
-                b1.metric("今天卖出大约收", f"${best.net_credit:.2f}/股")
-            else:
-                b1.metric("今天买进大约付", f"${best.net_debit:.2f}/股")
-            b2.metric("赢面大约", f"{wr_p:.0f}%" if wr_p is not None else "—")
-            liq_lab = getattr(best, "liquidity_label", "") or "—"
-            liq_sc = getattr(best, "liquidity_score", None)
-            b3.metric(
-                "流动性",
-                liq_lab,
-                f"{liq_sc:.0f}分" if liq_sc is not None else None,
-            )
-            b4.metric("最多能赚", f"${best.max_profit:.0f}/张")
-            b5.metric("最多会亏", f"${best.max_loss:.0f}/张")
-            b6.metric("不赚不亏价", f"{best.breakevens[0]:.2f}" if best.breakevens else "—")
-
-            if getattr(best, "liquidity_detail", ""):
-                st.caption(f"流动性：{best.liquidity_detail}")
-
-            # 热门数字一览
             c_w = getattr(best, "metric_credit_width", None)
-            roc = getattr(best, "metric_roc", None)
             half_p = getattr(best, "metric_half_profit", None)
+            half_bb = getattr(best, "metric_half_buyback", None)
             mc = getattr(best, "method_composite", None)
-            x1, x2, x3, x4 = st.columns(4)
-            x1.metric(
-                "权利金/宽度",
-                f"{c_w:.0f}%" if c_w is not None else "—",
-                help="很多人用：收到的钱 ÷ 两腿间距 ≈ 25%–33%",
+            pricing_mode = getattr(best, "pricing_mode", "") or ""
+            prem = f"${best.net_credit:.2f}" if is_credit else f"${best.net_debit:.2f}"
+            prem_lbl = "今天大约收" if is_credit else "今天大约付"
+            close_lbl = "50%止盈买回价" if is_credit else "50%止盈卖出价"
+            be = best.breakevens[0] if best.breakevens else None
+            fit_line = (
+                f'<p class="mini-note">贴合 {fit:.0f}/100 · {src}</p>'
+                if fit is not None
+                else ""
             )
-            x2.metric(
-                "赚亏比 ROC",
-                f"{roc:.2f}" if roc is not None else "—",
-                help="最多赚 ÷ 最多亏",
+            liq_line = (
+                f'<p class="mini-note">{getattr(best, "liquidity_detail", "")}</p>'
+                if getattr(best, "liquidity_detail", "")
+                else ""
             )
-            x3.metric(
-                "一半利润可走",
-                f"${half_p:.0f}/张" if half_p is not None else "—",
-                help="常见操作：赚到最大利润约 50% 就提前买回",
+            price_note = ""
+            if pricing_mode == "natural":
+                price_note = (
+                    '<p class="mini-note">定价：自然成交（卖腿=bid · 买腿=ask），比中间价更保守</p>'
+                )
+            elif pricing_mode == "mid_mixed":
+                price_note = (
+                    '<p class="mini-note">定价：部分腿无买卖价，已混用中间价</p>'
+                )
+            elif pricing_mode == "mid_only":
+                price_note = (
+                    '<p class="mini-note">定价：无有效 bid/ask，整组用中间价估算（盘后常见）</p>'
+                )
+            half_note = ""
+            if half_bb is not None and half_p is not None:
+                if is_credit:
+                    half_note = (
+                        f'<p class="mini-note">常见做法：浮盈到约 ${half_p:.0f}/张时，'
+                        f'把价差<strong style="color:#d2a8ff">买回约 ${half_bb:.2f}/股</strong>离场</p>'
+                    )
+                else:
+                    half_note = (
+                        f'<p class="mini-note">常见做法：浮盈到约 ${half_p:.0f}/张时，'
+                        f'把价差<strong style="color:#d2a8ff">卖出约 ${half_bb:.2f}/股</strong>落袋</p>'
+                    )
+            mc_pill = (
+                f'<span class="pill pill-amber">规则 {mc:.0f}</span>'
+                if mc is not None
+                else ""
             )
-            x4.metric(
-                "热门规则总分",
-                f"{mc:.0f}" if mc is not None else "—",
-                help="多条常见规则加权平均",
+            wr_txt = f"{wr_p:.0f}%" if wr_p is not None else "—"
+            be_txt = f"{be:.2f}" if be is not None else "—"
+            cw_txt = f"{c_w:.0f}%" if c_w is not None else "—"
+            half_txt = f"${half_p:.0f}" if half_p is not None else "—"
+            half_bb_txt = f"${half_bb:.2f}" if half_bb is not None else "—"
+
+            st.markdown(
+                f"""
+                <div class="glass-card glass-card-accent">
+                  <p class="section-label">Best pick · 推荐</p>
+                  <p class="hero-title" style="font-size:1.25rem;">{do_word}</p>
+                  <p class="hero-desc" style="margin-top:0.25rem;">
+                    然后 <strong style="color:#d2a8ff">{close_word}</strong>
+                    · 方向 {(d.direction if d else '—')}
+                    · 像「{style}」
+                  </p>
+                  <div class="pill-row">
+                    <span class="pill pill-blue">{best.name}</span>
+                    <span class="pill pill-green">赢面 {wr_txt}</span>
+                    <span class="pill pill-purple">流动性 {liq_lab}</span>
+                    {mc_pill}
+                  </div>
+                  <div class="kpi-grid">
+                    <div class="kpi">
+                      <p class="kpi-label">{prem_lbl}</p>
+                      <p class="kpi-value accent">{prem}<span style="font-size:0.75rem;font-weight:500"> /股</span></p>
+                    </div>
+                    <div class="kpi">
+                      <p class="kpi-label">{close_lbl}</p>
+                      <p class="kpi-value accent">{half_bb_txt}<span style="font-size:0.75rem;font-weight:500"> /股</span></p>
+                    </div>
+                    <div class="kpi">
+                      <p class="kpi-label">一半利润约</p>
+                      <p class="kpi-value up">{half_txt}<span style="font-size:0.75rem;font-weight:500"> /张</span></p>
+                    </div>
+                    <div class="kpi">
+                      <p class="kpi-label">最多赚 / 张</p>
+                      <p class="kpi-value up">${best.max_profit:.0f}</p>
+                    </div>
+                    <div class="kpi">
+                      <p class="kpi-label">最多亏 / 张</p>
+                      <p class="kpi-value down">${best.max_loss:.0f}</p>
+                    </div>
+                    <div class="kpi">
+                      <p class="kpi-label">不赚不亏价</p>
+                      <p class="kpi-value">{be_txt}</p>
+                    </div>
+                    <div class="kpi">
+                      <p class="kpi-label">权利金/宽度</p>
+                      <p class="kpi-value">{cw_txt}</p>
+                    </div>
+                  </div>
+                  <p class="mini-note">{plain}</p>
+                  {half_note}
+                  {price_note}
+                  {fit_line}
+                  {liq_line}
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
 
-            st.caption(f"具体组合：{best.name}")
-            with st.expander("买卖明细 + 每腿流动性", expanded=False):
+            steps = plain_spread_steps(best)
+            steps_html = '<div class="glass-card"><p class="section-label">How to trade · 两步</p>'
+            nstep = 0
+            for line in steps:
+                clean = (
+                    line.replace("**", "")
+                    .replace("第1步（今天）：", "")
+                    .replace("第2步（几天后）：", "")
+                )
+                if "分两步" in line or line.startswith("做法"):
+                    steps_html += f'<p class="mini-note">{clean}</p>'
+                    continue
+                nstep += 1
+                steps_html += (
+                    f'<div class="step-row"><div class="step-num">{nstep}</div>'
+                    f'<div class="step-body">{clean}</div></div>'
+                )
+            steps_html += "</div>"
+            st.markdown(steps_html, unsafe_allow_html=True)
+
+            with st.expander("买卖两腿 + 流动性明细", expanded=False):
                 st.dataframe(legs_to_frame(best), use_container_width=True, hide_index=True)
-                st.caption("未平仓/成交量越大、买卖差越小 → 越好成交。")
 
             mrows = methods_to_rows(best)
             if mrows:
-                with st.expander("用了哪些真实/热门规则打分（可看）", expanded=True):
-                    st.caption(
-                        "报价来自 Yahoo 真实期权链；规则来自常见教学归纳"
-                        "（高概率价差、1/3 宽度、30–45 天、50% 止盈等），不是保证赚钱。"
-                    )
-                    st.dataframe(
-                        pd.DataFrame(mrows),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
+                with st.expander("热门规则打分（真实盘面 + 常见做法）", expanded=False):
+                    st.caption("Yahoo 期权链 · 教学规则归纳 · 非保证收益")
+                    st.dataframe(pd.DataFrame(mrows), use_container_width=True, hide_index=True)
 
             ops = getattr(best, "ops_plan", None)
             if ops is not None:
-                with st.expander("热门操作方式：怎么进、怎么管、怎么出", expanded=True):
-                    st.markdown(f"**进场：** {ops.entry}")
-                    st.markdown(f"**持有中：** {ops.manage}")
-                    st.markdown("**出场常见做法：**")
+                with st.expander("怎么进 / 管 / 出", expanded=False):
+                    st.markdown(f"**进场** — {ops.entry}")
+                    st.markdown(f"**持有** — {ops.manage}")
                     for e in ops.exit_rules:
                         st.markdown(f"- {e}")
 
             reasons = getattr(best, "playbook_reasons", None) or []
             if reasons:
-                with st.expander("为什么说像这种做法", expanded=False):
+                with st.expander("为什么像这种做法", expanded=False):
                     for r in reasons:
                         st.markdown(f"- {r}")
 
-            # 最高赢面（实战过滤）
             if pb_wr is not None and getattr(pb_wr, "win_rate_profit", None) is not None:
                 same = pb_wr is best
-                st.subheader("② 最高赢面（在常见规则里挑）")
                 if same:
-                    st.info(
-                        f"刚好就是上面这一套：赢面大约 **{pb_wr.win_rate_profit:.0f}%**"
-                        + (
-                            f"，大赢约 {pb_wr.win_rate_max:.0f}%"
-                            if pb_wr.win_rate_max is not None
-                            else ""
-                        )
+                    extra = (
+                        f" · 大赢约 {pb_wr.win_rate_max:.0f}%"
+                        if pb_wr.win_rate_max is not None
+                        else ""
+                    )
+                    st.markdown(
+                        f"""
+                        <div class="glass-card">
+                          <p class="section-label">Highest win rate · 最高赢面</p>
+                          <p class="kpi-value accent" style="font-size:1.35rem;">{pb_wr.win_rate_profit:.0f}%</p>
+                          <p class="mini-note">与推荐是同一套{extra}</p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
                     )
                 else:
-                    st.markdown(
-                        f"**{pb_wr.name}** · 赢面约 **{pb_wr.win_rate_profit:.0f}%**"
-                        + (
-                            f" · 像「{getattr(pb_wr, 'playbook_style', '')}」"
-                            if getattr(pb_wr, "playbook_style", "")
-                            else ""
-                        )
+                    prem2 = (
+                        f"收 ${pb_wr.net_credit:.2f}"
+                        if pb_wr.net_credit is not None
+                        else f"付 ${pb_wr.net_debit:.2f}"
                     )
-                    if pb_wr.net_credit is not None:
-                        st.caption(
-                            f"今天卖出约收 ${pb_wr.net_credit:.2f}/股，"
-                            f"最多赚 ${pb_wr.max_profit:.0f}/张，最多亏 ${pb_wr.max_loss:.0f}/张"
-                        )
-                    else:
-                        st.caption(
-                            f"今天买进约付 ${pb_wr.net_debit:.2f}/股，"
-                            f"最多赚 ${pb_wr.max_profit:.0f}/张，最多亏 ${pb_wr.max_loss:.0f}/张"
-                        )
-                    with st.expander("最高赢面 · 两腿明细", expanded=False):
+                    st.markdown(
+                        f"""
+                        <div class="glass-card">
+                          <p class="section-label">Highest win rate · 最高赢面</p>
+                          <p class="hero-title" style="font-size:1.1rem;">{pb_wr.name}</p>
+                          <div class="pill-row">
+                            <span class="pill pill-green">赢面 {pb_wr.win_rate_profit:.0f}%</span>
+                            <span class="pill">{prem2}</span>
+                            <span class="pill">赚 ${pb_wr.max_profit:.0f} · 亏 ${pb_wr.max_loss:.0f}</span>
+                          </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    with st.expander("最高赢面 · 两腿", expanded=False):
                         st.dataframe(
                             legs_to_frame(pb_wr), use_container_width=True, hide_index=True
                         )
-                    for line in plain_spread_steps(pb_wr):
-                        st.markdown(line)
 
-            # 实战对照表
             ptable = getattr(opt_rep, "playbook_table", None) or []
             if ptable:
-                with st.expander("对照：常见策略排行（含流动性，可滚）", expanded=True):
-                    st.caption(
-                        "按「常见做法 + 赢面 + 流动性 + 报价」打分。"
-                        "流动性看：未平仓、成交量、买卖价差。"
-                    )
+                with st.expander("策略排行榜（可滚）", expanded=False):
                     st.dataframe(
                         pd.DataFrame(ptable),
                         use_container_width=True,
@@ -1413,9 +1496,19 @@ elif page == "期权价差":
                     for line in opt_rep.action_plan:
                         st.markdown(f"- {line}")
 
-            # ---- 到期到什么价赚/蚀 ----
-            st.subheader("③ 拿到到期：股票到什么价是赚/蚀")
-            st.caption("一般**不用行权**。到期或平仓时，看股票价在「不赚不亏价」哪一边。")
+            # payoff / daily sections need these
+            pay_idea = best
+            spot_px = opt_rep.spot
+
+            st.markdown(
+                """
+                <div class="glass-card" style="margin-bottom:0.4rem;">
+                  <p class="section-label">P&amp;L by price · 到什么价赚/蚀</p>
+                  <p class="mini-note">一般不用行权。到期或平仓时，看股票价在「不赚不亏价」哪一边。</p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
             payoff_choices = {"系统建议": best}
             if hi is not None:
@@ -1426,6 +1519,7 @@ elif page == "期权价差":
                 "看哪一套价差",
                 list(payoff_choices.keys()),
                 horizontal=True,
+                key="opt_payoff_pick",
             )
             pay_idea = payoff_choices[payoff_pick]
             spot_px = opt_rep.spot
@@ -1466,17 +1560,19 @@ elif page == "期权价差":
             )
 
             # ---- 卖出后第几天买回 ----
-            st.subheader("④ 卖出后，第几天买回？赚亏大概多少")
+            st.markdown(
+                """
+                <div class="glass-card" style="margin-bottom:0.4rem;">
+                  <p class="section-label">Day by day · 第几天买回</p>
+                  <p class="mini-note">选持有天数（如 14 天），看每天若平仓大约赚还是蚀（估算）。</p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
             if pay_credit:
-                st.caption(
-                    "假设你**今天卖出价差收了钱**，下面每一天问："
-                    "若**那天买回平仓**，大概赚还是蚀？（估算，不是保证）"
-                )
+                st.caption("今天卖出价差收了钱 → 下面问：第 N 天买回，赚还是蚀？")
             else:
-                st.caption(
-                    "假设你**今天买进价差付了钱**，下面每一天问："
-                    "若**那天卖出平仓**，大概赚还是蚀？（估算，不是保证）"
-                )
+                st.caption("今天买进价差付了钱 → 下面问：第 N 天卖出，赚还是蚀？")
 
             dte_cap = int(pay_idea.dte or opt_rep.dte or 30)
             dte_cap = max(dte_cap, 1)
@@ -1585,34 +1681,34 @@ elif page == "期权价差":
             with st.expander("这些「常见做法」从哪来（白话）", expanded=False):
                 st.markdown(
                     """
-本页**不是抄某一家荐股**，而是把很多人教学里反复出现的规则写成筛子：
+            本页**不是抄某一家荐股**，而是把很多人教学里反复出现的规则写成筛子：
 
-| 常见叫法 | 白话规则 |
-|----------|----------|
-| 高胜率收钱价差 | 卖出价差；短腿离现价远一点；大约 3–6 周到期；赢面偏好高 |
-| 权利金约 1/3 宽 | 收到的钱大约是两腿间距的 1/4～1/3 |
-| 偏多收租 | 看多时卖 Put 价差，先收钱，再买回 |
-| 偏空收租 | 看空时卖 Call 价差，先收钱，再买回 |
-| 顺势买进 | 方向很强才买进价差（先付钱） |
+            | 常见叫法 | 白话规则 |
+            |----------|----------|
+            | 高胜率收钱价差 | 卖出价差；短腿离现价远一点；大约 3–6 周到期；赢面偏好高 |
+            | 权利金约 1/3 宽 | 收到的钱大约是两腿间距的 1/4～1/3 |
+            | 偏多收租 | 看多时卖 Put 价差，先收钱，再买回 |
+            | 偏空收租 | 看空时卖 Call 价差，先收钱，再买回 |
+            | 顺势买进 | 方向很强才买进价差（先付钱） |
 
-**最好** = 最像上述规则 + 方向对 + 报价合理。  
-**最高赢面** = 在还能算「像常见做法」的里面，赢面% 最高。
+            **最好** = 最像上述规则 + 方向对 + 报价合理。  
+            **最高赢面** = 在还能算「像常见做法」的里面，赢面% 最高。
 
-| 你怎么想 | 今天 | 几天后 |
-|----------|------|--------|
-| 不会大跌 | 卖出看跌价差收钱 | 买回 |
-| 会大涨 | 买进看涨价差付钱 | 卖出 |
-| 不会大涨 | 卖出看涨价差收钱 | 买回 |
-| 会大跌 | 买进看跌价差付钱 | 卖出 |
+            | 你怎么想 | 今天 | 几天后 |
+            |----------|------|--------|
+            | 不会大跌 | 卖出看跌价差收钱 | 买回 |
+            | 会大涨 | 买进看涨价差付钱 | 卖出 |
+            | 不会大涨 | 卖出看涨价差收钱 | 买回 |
+            | 会大跌 | 买进看跌价差付钱 | 卖出 |
 
-赢面是估算，**不是保证**。
-"""
+            赢面是估算，**不是保证**。
+            """
                 )
 
             st.warning("仅供学习，**不是投资建议**。下单以券商实时报价为准。")
 
-    if not is_options_eligible(symbol):
-        st.info(f"侧边栏是 `{symbol}`，本页在分析 `{opt_sym}`。")
+            if not is_options_eligible(symbol):
+                st.info(f"侧边栏是 `{symbol}`，本页在分析 `{opt_sym}`。")
 
 
 # ===================== 技术分析 =====================

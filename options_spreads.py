@@ -223,6 +223,9 @@ class Leg:
     oi: float | None
     volume: float | None
     delta_proxy: float | None = None
+    # 成交假设：卖用 bid、买用 ask（自然成交）；无报价时回退 mid
+    fill: float = 0.0
+    fill_source: str = "mid"  # bid | ask | mid
 
 
 @dataclass
@@ -255,6 +258,11 @@ class SpreadIdea:
     liquidity_score: float | None = None  # 0-100
     liquidity_label: str = ""  # 高 / 中 / 低 / 未知
     liquidity_detail: str = ""  # 白话说明
+    # 定价：自然成交（bid/ask）还是 mid 回退
+    pricing_mode: str = "natural"  # natural | mid_mixed | mid_only
+    # 50% 止盈：买回/卖出目标价（$/股）与浮盈（$/张）
+    metric_half_buyback: float | None = None
+    metric_half_profit: float | None = None
 
     def __post_init__(self) -> None:
         # 兼容旧缓存 / 不完整构造，保证属性始终存在
@@ -272,6 +280,12 @@ class SpreadIdea:
             self.liquidity_label = ""
         if not hasattr(self, "liquidity_detail"):
             self.liquidity_detail = ""
+        if not hasattr(self, "pricing_mode"):
+            self.pricing_mode = "natural"
+        if not hasattr(self, "metric_half_buyback"):
+            self.metric_half_buyback = None
+        if not hasattr(self, "metric_half_profit"):
+            self.metric_half_profit = None
         if self.pop_est is None and self.win_rate_profit is not None:
             self.pop_est = self.win_rate_profit
 
@@ -299,6 +313,24 @@ class OptionsReport:
     regime: str = "—"
     summary: str = ""
     action_plan: list[str] = field(default_factory=list)
+    # 报价质量
+    after_hours: bool = False
+    pricing_note: str = ""
+    quote_warning: str = ""
+    filtered_out: int = 0  # 硬过滤剔除数
+
+
+# ---------------------------------------------------------------------------
+# Pricing helpers (bid/ask natural fill)
+# ---------------------------------------------------------------------------
+
+# Hard filter thresholds (credit fill = credit / width)
+HARD_MIN_LIQ_SCORE = 28.0
+HARD_CREDIT_FILL_LO = 0.12
+HARD_CREDIT_FILL_HI = 0.45
+HARD_DEBIT_FILL_HI = 0.78
+HARD_MIN_CREDIT = 0.08
+HARD_MIN_AVG_OI = 15.0
 
 
 def _mid(bid: float, ask: float, last: float) -> float:
@@ -311,6 +343,111 @@ def _mid(bid: float, ask: float, last: float) -> float:
     if bid and bid > 0:
         return float(bid)
     return 0.0
+
+
+def _fill_price(side: str, bid: float, ask: float, mid: float) -> tuple[float, str]:
+    """
+    自然成交假设：卖腿吃 bid（别人出价买你的），买腿付 ask（你按卖价买）。
+    无有效 bid/ask 时回退 mid（盘后常见）。
+    """
+    b = float(bid or 0)
+    a = float(ask or 0)
+    m = float(mid or 0)
+    if side == "sell":
+        if b > 0:
+            return b, "bid"
+        return m, "mid"
+    # buy
+    if a > 0:
+        return a, "ask"
+    return m, "mid"
+
+
+def _pricing_mode_for_legs(legs: list[Leg]) -> str:
+    srcs = {getattr(lg, "fill_source", "mid") or "mid" for lg in legs}
+    if srcs <= {"bid", "ask"}:
+        return "natural"
+    if "bid" in srcs or "ask" in srcs:
+        return "mid_mixed"
+    return "mid_only"
+
+
+def _is_us_rth() -> bool:
+    """美东常规交易时段 Mon–Fri 09:30–16:00。"""
+    try:
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        # 粗略按 UTC-4（夏令）回退
+        now = datetime.utcnow() - timedelta(hours=4)
+    if now.weekday() >= 5:
+        return False
+    mins = now.hour * 60 + now.minute
+    return (9 * 60 + 30) <= mins < (16 * 60)
+
+
+def half_profit_close_price(idea: SpreadIdea) -> float | None:
+    """
+    50% 最大利润时的平仓目标价（$/股）。
+    信用：开仓收 C → 买回约 C*0.5 即赚一半。
+    借方：开仓付 D → 卖出约 D + 0.5*(W-D) 即赚一半。
+    一律用已入账的 net_credit/net_debit（两位小数）计算，避免舍入不一致。
+    """
+    if idea.net_credit is not None:
+        c = round(float(idea.net_credit), 2)
+        if c <= 0:
+            return None
+        return round(c * 0.5, 2)
+    if idea.net_debit is not None:
+        d = round(float(idea.net_debit), 2)
+        w = float(idea.width or 0)
+        if d <= 0:
+            return None
+        if w > d:
+            return round(d + 0.5 * (w - d), 2)
+        half_ps = float(idea.max_profit or 0) / 200.0
+        return round(d + half_ps, 2)
+    return None
+
+
+def passes_hard_filters(idea: SpreadIdea) -> bool:
+    """流动性 + 权利金/宽度硬门槛；不过滤掉则不应出现在推荐列表。"""
+    liq = getattr(idea, "liquidity_score", None)
+    label = getattr(idea, "liquidity_label", "") or ""
+    if label == "很差":
+        return False
+    if liq is not None and float(liq) < HARD_MIN_LIQ_SCORE:
+        return False
+
+    w = float(idea.width or 0)
+    if w <= 0:
+        return False
+
+    if idea.net_credit is not None:
+        c = float(idea.net_credit)
+        if c < HARD_MIN_CREDIT:
+            return False
+        fill = c / w
+        if fill < HARD_CREDIT_FILL_LO or fill > HARD_CREDIT_FILL_HI:
+            return False
+    elif idea.net_debit is not None:
+        d = float(idea.net_debit)
+        if d < 0.05:
+            return False
+        fill = d / w
+        if fill > HARD_DEBIT_FILL_HI:
+            return False
+    else:
+        return False
+
+    # 两腿平均 OI 过低且流动性一般 → 丢弃
+    ois = [float(lg.oi or 0) for lg in idea.legs]
+    avg_oi = sum(ois) / max(len(ois), 1)
+    if avg_oi < HARD_MIN_AVG_OI and (liq is None or float(liq) < 45):
+        return False
+
+    return True
 
 
 def _sane_option_mid(
@@ -476,6 +613,9 @@ def _nearest_strike(df: pd.DataFrame, target: float, side: str = "any") -> pd.Se
 def _leg_from_row(row: pd.Series, right: str, side: str, spot: float) -> Leg:
     strike = float(row["strike"])
     mid = float(row["mid"])
+    bid = float(row.get("bid") or 0)
+    ask = float(row.get("ask") or 0)
+    fill, fill_src = _fill_price(side, bid, ask, mid)
     if right == "put":
         if strike < spot:
             otm = (spot - strike) / spot
@@ -502,12 +642,14 @@ def _leg_from_row(row: pd.Series, right: str, side: str, spot: float) -> Leg:
         strike=strike,
         side=side,
         mid=mid,
-        bid=float(row.get("bid") or 0),
-        ask=float(row.get("ask") or 0),
+        bid=bid,
+        ask=ask,
         iv=iv,
         oi=float(row.get("oi") or 0),
         volume=float(row.get("vol") or 0),
         delta_proxy=float(delta_proxy),
+        fill=float(fill),
+        fill_source=fill_src,
     )
 
 
@@ -765,29 +907,33 @@ def build_bull_put(
 
     short_leg = _leg_from_row(short_row, "put", "sell", spot)
     long_leg = _leg_from_row(long_row, "put", "buy", spot)
-    credit = short_leg.mid - long_leg.mid
-    if credit <= 0.05:
+    # 自然成交：卖腿 bid − 买腿 ask（比 mid 更保守）
+    credit = short_leg.fill - long_leg.fill
+    if credit <= HARD_MIN_CREDIT:
         return None
     w = short_k - long_k
-    if not _width_ok(w, width) or credit / w > 0.55:
+    if not _width_ok(w, width) or credit / w > HARD_CREDIT_FILL_HI:
         return None
     max_profit = credit * 100
     max_loss = (w - credit) * 100
     if max_loss <= 0:
         return None
     be = short_k - credit
-    fill = credit / w
+    fill_ratio = credit / w
     rr = max_profit / max_loss
-    score = min(100.0, fill * 140 + min(short_leg.oi or 0, 3000) / 3000 * 12 + 40)
+    score = min(100.0, fill_ratio * 140 + min(short_leg.oi or 0, 3000) / 3000 * 12 + 40)
     actual_otm = (spot - short_k) / spot * 100
+    credit_r = round(credit, 2)
+    half_bb = round(credit_r * 0.5, 2)
+    max_profit_r = round(max_profit, 2)
     return SpreadIdea(
         name=f"Bull Put Credit · 卖{short_k:.0f}/买{long_k:.0f}",
         code="bull_put",
         structure="Credit Vertical",
         thesis="看多/偏多",
-        net_credit=round(credit, 2),
+        net_credit=credit_r,
         net_debit=None,
-        max_profit=round(max_profit, 2),
+        max_profit=max_profit_r,
         max_loss=round(max_loss, 2),
         breakevens=[round(be, 2)],
         width=round(w, 2),
@@ -798,12 +944,16 @@ def build_bull_put(
         legs=[short_leg, long_leg],
         notes=[
             f"开仓：卖 {short_k:.0f} Put，买 {long_k:.0f} Put（同一到期）",
-            f"净收约 ${credit:.2f}/股 → 最大盈 ${max_profit:.0f}，最大亏 ${max_loss:.0f}",
+            f"净收约 ${credit_r:.2f}/股（卖腿按买价bid、买腿按卖价ask）→ 最大盈 ${max_profit_r:.0f}，最大亏 ${max_loss:.0f}",
             f"打和点 {be:.2f}；到期收盘 > {be:.2f} 有利",
             f"短腿约 {actual_otm:.1f}% OTM",
+            f"50%止盈：价差买回约 ${half_bb:.2f}/股（约赚 ${max_profit_r * 0.5:.0f}/张）",
         ],
         risk_reward=round(rr, 2),
         otm_label=f"短腿约 {actual_otm:.1f}% OTM",
+        pricing_mode=_pricing_mode_for_legs([short_leg, long_leg]),
+        metric_half_buyback=half_bb,
+        metric_half_profit=round(max_profit_r * 0.5, 1),
     )
 
 
@@ -837,29 +987,32 @@ def build_bear_call(
 
     short_leg = _leg_from_row(short_row, "call", "sell", spot)
     long_leg = _leg_from_row(long_row, "call", "buy", spot)
-    credit = short_leg.mid - long_leg.mid
-    if credit <= 0.05:
+    credit = short_leg.fill - long_leg.fill
+    if credit <= HARD_MIN_CREDIT:
         return None
     w = long_k - short_k
-    if not _width_ok(w, width) or credit / w > 0.55:
+    if not _width_ok(w, width) or credit / w > HARD_CREDIT_FILL_HI:
         return None
     max_profit = credit * 100
     max_loss = (w - credit) * 100
     if max_loss <= 0:
         return None
     be = short_k + credit
-    fill = credit / w
+    fill_ratio = credit / w
     rr = max_profit / max_loss
-    score = min(100.0, fill * 140 + min(short_leg.oi or 0, 3000) / 3000 * 12 + 40)
+    score = min(100.0, fill_ratio * 140 + min(short_leg.oi or 0, 3000) / 3000 * 12 + 40)
     actual_otm = (short_k - spot) / spot * 100
+    credit_r = round(credit, 2)
+    half_bb = round(credit_r * 0.5, 2)
+    max_profit_r = round(max_profit, 2)
     return SpreadIdea(
         name=f"Bear Call Credit · 卖{short_k:.0f}/买{long_k:.0f}",
         code="bear_call",
         structure="Credit Vertical",
         thesis="看空/偏空",
-        net_credit=round(credit, 2),
+        net_credit=credit_r,
         net_debit=None,
-        max_profit=round(max_profit, 2),
+        max_profit=max_profit_r,
         max_loss=round(max_loss, 2),
         breakevens=[round(be, 2)],
         width=round(w, 2),
@@ -870,12 +1023,16 @@ def build_bear_call(
         legs=[short_leg, long_leg],
         notes=[
             f"开仓：卖 {short_k:.0f} Call，买 {long_k:.0f} Call",
-            f"净收约 ${credit:.2f}/股 → 最大盈 ${max_profit:.0f}，最大亏 ${max_loss:.0f}",
+            f"净收约 ${credit_r:.2f}/股（卖腿bid / 买腿ask）→ 最大盈 ${max_profit_r:.0f}，最大亏 ${max_loss:.0f}",
             f"打和点 {be:.2f}；到期收盘 < {be:.2f} 有利",
             f"短腿约 {actual_otm:.1f}% OTM",
+            f"50%止盈：价差买回约 ${half_bb:.2f}/股（约赚 ${max_profit_r * 0.5:.0f}/张）",
         ],
         risk_reward=round(rr, 2),
         otm_label=f"短腿约 {actual_otm:.1f}% OTM",
+        pricing_mode=_pricing_mode_for_legs([short_leg, long_leg]),
+        metric_half_buyback=half_bb,
+        metric_half_profit=round(max_profit_r * 0.5, 1),
     )
 
 
@@ -906,11 +1063,12 @@ def build_bull_call(
 
     long_leg = _leg_from_row(long_row, "call", "buy", spot)
     short_leg = _leg_from_row(short_row, "call", "sell", spot)
-    debit = long_leg.mid - short_leg.mid
+    # 自然成交：买腿 ask − 卖腿 bid（借方更贵、更保守）
+    debit = long_leg.fill - short_leg.fill
     if debit <= 0.05:
         return None
     w = short_k - long_k
-    if not _width_ok(w, width) or debit >= w * 0.92:
+    if not _width_ok(w, width) or debit / w > HARD_DEBIT_FILL_HI:
         return None
     max_profit = (w - debit) * 100
     max_loss = debit * 100
@@ -920,27 +1078,35 @@ def build_bull_call(
     rr = max_profit / max_loss
     fill = 1 - debit / w
     score = min(100.0, fill * 90 + rr * 35 + min(long_leg.oi or 0, 2000) / 2000 * 10)
+    debit_r = round(debit, 2)
+    w_r = round(w, 2)
+    half_bb = round(debit_r + 0.5 * (w_r - debit_r), 2)
+    max_profit_r = round(max_profit, 2)
     return SpreadIdea(
         name=f"Bull Call Debit · 买{long_k:.0f}/卖{short_k:.0f}",
         code="bull_call",
         structure="Debit Vertical",
         thesis="看多",
         net_credit=None,
-        net_debit=round(debit, 2),
-        max_profit=round(max_profit, 2),
+        net_debit=debit_r,
+        max_profit=max_profit_r,
         max_loss=round(max_loss, 2),
         breakevens=[round(be, 2)],
-        width=round(w, 2),
+        width=w_r,
         pop_est=None,
         score=round(score, 1),
         dte=dte,
         expiry=expiry,
         legs=[long_leg, short_leg],
+        pricing_mode=_pricing_mode_for_legs([long_leg, short_leg]),
+        metric_half_buyback=half_bb,
+        metric_half_profit=round(max_profit_r * 0.5, 1),
         notes=[
             f"开仓：买 {long_k:.0f} Call，卖 {short_k:.0f} Call",
-            f"净付约 ${debit:.2f}/股 → 最大盈 ${max_profit:.0f}，最大亏 ${max_loss:.0f}",
+            f"净付约 ${debit_r:.2f}/股（买腿ask / 卖腿bid）→ 最大盈 ${max_profit_r:.0f}，最大亏 ${max_loss:.0f}",
             f"打和点 {be:.2f}；越接近/超过 {short_k:.0f} 利润越大",
             "适合明确看多；比单买 Call 更便宜但封顶盈利",
+            f"50%止盈：价差卖出约 ${half_bb:.2f}/股（约赚 ${max_profit_r * 0.5:.0f}/张）",
         ],
         risk_reward=round(rr, 2),
         otm_label=f"长腿行权价 {long_k:.0f}",
@@ -974,11 +1140,11 @@ def build_bear_put(
 
     long_leg = _leg_from_row(long_row, "put", "buy", spot)
     short_leg = _leg_from_row(short_row, "put", "sell", spot)
-    debit = long_leg.mid - short_leg.mid
+    debit = long_leg.fill - short_leg.fill
     if debit <= 0.05:
         return None
     w = long_k - short_k
-    if not _width_ok(w, width) or debit >= w * 0.92:
+    if not _width_ok(w, width) or debit / w > HARD_DEBIT_FILL_HI:
         return None
     max_profit = (w - debit) * 100
     max_loss = debit * 100
@@ -988,31 +1154,73 @@ def build_bear_put(
     rr = max_profit / max_loss
     fill = 1 - debit / w
     score = min(100.0, fill * 90 + rr * 35 + min(long_leg.oi or 0, 2000) / 2000 * 10)
+    debit_r = round(debit, 2)
+    w_r = round(w, 2)
+    half_bb = round(debit_r + 0.5 * (w_r - debit_r), 2)
+    max_profit_r = round(max_profit, 2)
     return SpreadIdea(
         name=f"Bear Put Debit · 买{long_k:.0f}/卖{short_k:.0f}",
         code="bear_put",
         structure="Debit Vertical",
         thesis="看空",
         net_credit=None,
-        net_debit=round(debit, 2),
-        max_profit=round(max_profit, 2),
+        net_debit=debit_r,
+        max_profit=max_profit_r,
         max_loss=round(max_loss, 2),
         breakevens=[round(be, 2)],
-        width=round(w, 2),
+        width=w_r,
         pop_est=None,
         score=round(score, 1),
         dte=dte,
         expiry=expiry,
         legs=[long_leg, short_leg],
+        pricing_mode=_pricing_mode_for_legs([long_leg, short_leg]),
+        metric_half_buyback=half_bb,
+        metric_half_profit=round(max_profit_r * 0.5, 1),
         notes=[
             f"开仓：买 {long_k:.0f} Put，卖 {short_k:.0f} Put",
-            f"净付约 ${debit:.2f}/股 → 最大盈 ${max_profit:.0f}，最大亏 ${max_loss:.0f}",
+            f"净付约 ${debit_r:.2f}/股（买腿ask / 卖腿bid）→ 最大盈 ${max_profit_r:.0f}，最大亏 ${max_loss:.0f}",
             f"打和点 {be:.2f}；跌破 {short_k:.0f} 附近接近满盈",
             "适合明确看空；风险有限",
+            f"50%止盈：价差卖出约 ${half_bb:.2f}/股（约赚 ${max_profit_r * 0.5:.0f}/张）",
         ],
         risk_reward=round(rr, 2),
         otm_label=f"长腿行权价 {long_k:.0f}",
     )
+
+
+# ---------------------------------------------------------------------------
+# Cached option chain fetch
+# ---------------------------------------------------------------------------
+
+def _fetch_option_chain_uncached(symbol: str, expiry: str) -> dict[str, Any]:
+    """Pull raw chain frames; returns dict for Streamlit cache friendliness."""
+    ticker = yf.Ticker(symbol)
+    chain = ticker.option_chain(expiry)
+    calls = chain.calls.copy() if chain.calls is not None else pd.DataFrame()
+    puts = chain.puts.copy() if chain.puts is not None else pd.DataFrame()
+    return {"calls": calls, "puts": puts}
+
+
+_st_chain_cached = None  # lazily wrap with st.cache_data once
+
+
+def _get_cached_chain(symbol: str, expiry: str) -> dict[str, Any]:
+    """
+    期权链缓存：Streamlit 下 st.cache_data(ttl=120s)；
+    非 Streamlit 环境直接拉数。
+    """
+    global _st_chain_cached
+    try:
+        import streamlit as st
+
+        if _st_chain_cached is None:
+            _st_chain_cached = st.cache_data(ttl=120, show_spinner=False)(
+                _fetch_option_chain_uncached
+            )
+        return _st_chain_cached(symbol, expiry)
+    except Exception:
+        return _fetch_option_chain_uncached(symbol, expiry)
 
 
 # ---------------------------------------------------------------------------
@@ -1098,11 +1306,12 @@ def analyze_options_spreads(
             summary="无到期日。",
         )
     dte = _dte(expiry)
+    after_hours = not _is_us_rth()
 
     try:
-        chain = ticker.option_chain(expiry)
-        calls = _parse_chain(chain.calls, spot, "call")
-        puts = _parse_chain(chain.puts, spot, "put")
+        raw = _get_cached_chain(sym, expiry)
+        calls = _parse_chain(raw.get("calls"), spot, "call")
+        puts = _parse_chain(raw.get("puts"), spot, "put")
     except Exception as exc:
         return OptionsReport(
             symbol=sym,
@@ -1115,7 +1324,31 @@ def analyze_options_spreads(
             direction=direction,
             message=f"期权链失败：{exc}",
             summary="期权链失败。",
+            after_hours=after_hours,
         )
+
+    # 报价质量：有多少腿有有效 bid/ask
+    def _quote_coverage(df: pd.DataFrame) -> float:
+        if df is None or df.empty:
+            return 0.0
+        has = (df["bid"].fillna(0) > 0) & (df["ask"].fillna(0) > 0)
+        return float(has.mean()) if len(df) else 0.0
+
+    cov = 0.5 * (_quote_coverage(calls) + _quote_coverage(puts))
+    quote_warning = ""
+    pricing_note = "开仓按自然成交估算：卖腿=买价(bid)，买腿=卖价(ask)；比中间价更保守。"
+    if after_hours:
+        quote_warning = (
+            "当前可能不在美股常规交易时段（美东 09:30–16:00）。"
+            "盘后 bid/ask 常为空或失真，Yahoo lastPrice 也易过期——"
+            "权利金仅供参考，请在盘中用限价单核验。"
+        )
+        pricing_note += " 盘后若无买卖价则回退中间价/最新价。"
+    elif cov < 0.35:
+        quote_warning = (
+            "当前期权链买卖价覆盖偏低，部分腿用中间价估算，成交价可能偏差较大。"
+        )
+        pricing_note += " 部分腿无有效 bid/ask，已回退 mid。"
 
     iv_atm = _atm_iv(calls, puts, spot)
     if iv_atm is None or iv_atm < 0.05:
@@ -1173,6 +1406,18 @@ def analyze_options_spreads(
     except Exception:
         pass
 
+    # 补全 50% 止盈买回价（enrich 可能覆盖 metric_half_profit）
+    for idea in ideas:
+        bb = half_profit_close_price(idea)
+        if bb is not None:
+            idea.metric_half_buyback = bb
+        if idea.metric_half_profit is None:
+            idea.metric_half_profit = round(float(idea.max_profit) * 0.5, 1)
+
+    # 硬过滤：流动性 + 权利金/宽度
+    before_n = len(ideas)
+    ideas = [i for i in ideas if passes_hard_filters(i)]
+    filtered_out = before_n - len(ideas)
 
     # Align score with direction
     preferred = set(direction.preferred_verticals)
@@ -1375,20 +1620,34 @@ def analyze_options_spreads(
             + hi_txt
         )
         # 白话执行
+        half_bb = getattr(best, "metric_half_buyback", None)
+        half_p = getattr(best, "metric_half_profit", None)
+        if best.net_credit is not None:
+            open_line = f"3. 今天：卖出价差，大约收 ${best.net_credit:.2f}/股（卖=bid/买=ask）"
+            if half_bb is not None:
+                close_line = (
+                    f"4. 50%止盈：价差买回约 ${half_bb:.2f}/股"
+                    + (f"（约赚 ${half_p:.0f}/张）" if half_p is not None else "")
+                )
+            else:
+                close_line = "4. 几天后：买回平仓"
+        else:
+            open_line = f"3. 今天：买进价差，大约付 ${best.net_debit:.2f}/股（买=ask/卖=bid）"
+            if half_bb is not None:
+                close_line = (
+                    f"4. 50%止盈：价差卖出约 ${half_bb:.2f}/股"
+                    + (f"（约赚 ${half_p:.0f}/张）" if half_p is not None else "")
+                )
+            else:
+                close_line = "4. 几天后：卖出平仓"
+        if best.win_rate_profit is not None:
+            close_line += f"；估算赢面约 {best.win_rate_profit:.0f}%"
         action_plan = [
             f"1. 方向：{direction.direction}（{direction.strength}）",
             f"2. 实战推荐：{best.name}"
             + (f" —— 像「{style}」" if style else ""),
-            (
-                f"3. 今天：卖出价差，大约收 ${best.net_credit:.2f}/股"
-                if best.net_credit is not None
-                else f"3. 今天：买进价差，大约付 ${best.net_debit:.2f}/股"
-            ),
-            (
-                f"4. 几天后：买回平仓；估算赢面约 {best.win_rate_profit:.0f}%"
-                if best.win_rate_profit is not None
-                else "4. 几天后：买回/卖出平仓"
-            ),
+            open_line,
+            close_line,
             f"5. 最多赚约 ${best.max_profit:.0f}/张，最多亏约 ${best.max_loss:.0f}/张",
         ]
         if use_wr and use_wr is not best:
@@ -1405,12 +1664,16 @@ def analyze_options_spreads(
     else:
         summary = f"{sym} @ {spot:.2f}，方向 {direction.direction}，未能生成可用 vertical。"
 
+    msg = "仅分析 Vertical Spread；" + pricing_note
+    if filtered_out > 0:
+        msg += f" 已硬过滤剔除 {filtered_out} 个（流动性差或权利金/宽度不合规）。"
+
     return OptionsReport(
         symbol=sym,
         label=label,
         spot=spot,
         eligible=True,
-        message="仅分析 Vertical Spread；报价为中间价/最新价估算。",
+        message=msg,
         direction=direction,
         expiries=exps[:16],
         selected_expiry=expiry,
@@ -1427,6 +1690,10 @@ def analyze_options_spreads(
         regime=regime,
         summary=summary,
         action_plan=action_plan,
+        after_hours=after_hours,
+        pricing_note=pricing_note,
+        quote_warning=quote_warning,
+        filtered_out=filtered_out,
     )
 
 
@@ -1757,15 +2024,22 @@ def legs_to_frame(idea: SpreadIdea) -> pd.DataFrame:
         bid = float(leg.bid or 0)
         ask = float(leg.ask or 0)
         mid = float(leg.mid or 0)
+        fill = float(getattr(leg, "fill", 0) or mid)
+        fill_src = getattr(leg, "fill_source", "") or "mid"
         if bid > 0 and ask > 0 and mid > 0:
             ba = f"{(ask - bid) / mid * 100:.0f}%"
         else:
             ba = "—"
+        src_zh = {"bid": "买价bid", "ask": "卖价ask", "mid": "中间价"}.get(
+            fill_src, fill_src
+        )
         rows.append(
             {
                 "方向": "卖出" if leg.side == "sell" else "买入",
                 "类型": "看涨" if leg.right == "call" else "看跌",
                 "行权价": leg.strike,
+                "成交估": round(fill, 2),
+                "成交用": src_zh,
                 "中间价": round(mid, 2),
                 "买价": round(bid, 2),
                 "卖价": round(ask, 2),

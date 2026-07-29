@@ -337,7 +337,8 @@ def apply_playbook_ranking(
                 "热门规则分": getattr(idea, "method_composite", None),
                 "权利金/宽度%": getattr(idea, "metric_credit_width", None),
                 "赚亏比ROC": getattr(idea, "metric_roc", None),
-                "50%止盈约$": getattr(idea, "metric_half_profit", None),
+                "50%止盈约$/张": getattr(idea, "metric_half_profit", None),
+                "50%买回价$/股": getattr(idea, "metric_half_buyback", None),
                 "流动性": getattr(idea, "liquidity_label", "—"),
                 "流动性分": getattr(idea, "liquidity_score", None),
                 "卖出收$" if idea.net_credit is not None else "买进付$": (
