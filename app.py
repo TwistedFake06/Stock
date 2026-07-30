@@ -124,8 +124,14 @@ st.set_page_config(
     },
 )
 
-from ui_mobile import inject_mobile_css, metric_grid, plotly_chart as mobile_plotly
+from ui_mobile import (
+    inject_ios_safari_support,
+    inject_mobile_css,
+    metric_grid,
+    plotly_chart as mobile_plotly,
+)
 
+inject_ios_safari_support()
 inject_mobile_css()
 
 
