@@ -8,18 +8,55 @@
 - 🇭🇰 港股（如 `0700.HK`、`9988.HK`）
 - 🇨🇳 A股（如 `600519` 茅台、`000001` 平安银行；也可用 `600519.SS` / `000001.SZ`）
 
-## 功能
+## 功能（Streamlit 完整版）
 
-| 模块             | 说明                                                                                |
-| ---------------- | ----------------------------------------------------------------------------------- |
-| **行情看板**     | 最新价、涨跌、市值、PE、K线 + 成交量 + 多空摘要                                     |
-| **多空分析**     | 综合判断 **看多 / 看空 / 中性**（得分仪表盘 + 分项依据）                            |
-| **入场与目标价** | 入场评级、买卖区、止损、短中期目标、**仓位计算**、**交易计划卡**、**财报/除息提醒** |
-| **期权价差**     | 仅 **Vertical**：先判看多/看空，再推荐最佳 Bull/Bear Put/Call 垂直价差              |
-| **综合分析**     | 评分卡 + 风险 / 支撑阻力 / 趋势 / 基本面 / 相对强弱 / 量价                          |
-| **技术分析**     | SMA、布林带、RSI、MACD                                                              |
-| **多股对比**     | 多只股票归一化走势对比                                                              |
-| **自选股**       | 本地 watchlist，含多空标签与得分排序                                                |
+> 下表是 **Streamlit 完整版**（`app.py`）功能。  
+> 如果你当前使用的是 GitHub Pages 静态版（`index.html`），请看下一节「功能覆盖总览（完整版 vs 静态版）」。
+
+| 模块             | 说明                                                                                     | Streamlit 完整版 | GitHub Pages 静态版 |
+| ---------------- | ---------------------------------------------------------------------------------------- | ---------------- | ------------------- |
+| **行情看板**     | 最新价、涨跌、市值、PE、K线 + 成交量 + 多空摘要                                          | ✅               | ✅（Lite）          |
+| **多空分析**     | 综合判断 **看多 / 看空 / 中性**（得分仪表盘 + 分项依据）                                 | ✅               | ✅（Lite）          |
+| **入场与目标价** | 入场评级、买卖区、止损、短中期目标、**仓位计算**、**交易计划卡**、**财报/除息提醒**      | ✅               | ✅（简化版）        |
+| **期权价差**     | 仅 **Vertical**：先判看多/看空，再推荐最佳 Bull/Bear Put/Call 垂直价差（Streamlit 专属） | ✅               | ❌                  |
+| **综合分析**     | 评分卡 + 风险 / 支撑阻力 / 趋势 / 基本面 / 相对强弱 / 量价（Streamlit 专属）             | ✅               | ❌                  |
+| **技术分析**     | SMA、布林带、RSI、MACD                                                                   | ✅               | ✅（Lite 指标版）   |
+| **多股对比**     | 多只股票归一化走势对比（Streamlit 专属）                                                 | ✅               | ❌                  |
+| **自选股**       | 本地 watchlist，含多空标签与得分排序（Streamlit 专属）                                   | ✅               | ❌                  |
+
+## 功能覆盖总览（完整版 vs 静态版）
+
+为避免混淆，当前仓库有两种可用形态：
+
+- **完整版（Streamlit / `app.py`）**：功能最完整，适合深度分析
+- **静态版（GitHub Pages / `index.html` + `web/`）**：免后端、开箱即用，适合手机快速查看
+
+| 能力                                                       | Streamlit 完整版 | GitHub Pages 静态版 |
+| ---------------------------------------------------------- | ---------------- | ------------------- |
+| 多市场代码输入（美股/港股/A股）                            | ✅               | ✅                  |
+| K 线/价格趋势图                                            | ✅（Plotly）     | ✅（Chart.js）      |
+| 成交量图                                                   | ✅               | ✅                  |
+| SMA20 / SMA50                                              | ✅               | ✅                  |
+| RSI                                                        | ✅               | ✅（RSI14）         |
+| MACD                                                       | ✅               | ✅（MACD Hist）     |
+| 多空评分（Bias Score）                                     | ✅               | ✅                  |
+| 入场区 / 止损 / 目标位（计划卡）                           | ✅               | ✅（简化版）        |
+| 综合分析（评分卡/风险/支撑阻力/趋势/基本面/相对强弱/量价） | ✅               | ❌                  |
+| 期权垂直价差策略                                           | ✅               | ❌                  |
+| 多股对比                                                   | ✅               | ❌                  |
+| 自选股 Watchlist 持久化                                    | ✅               | ❌                  |
+| iPhone Safari 适配                                         | ✅               | ✅                  |
+| 无后端直接通过 GitHub Pages 使用                           | ❌               | ✅                  |
+
+### 静态版当前特性（Stock Analyzer Lite）
+
+- 快速输入或一键示例代码（`AAPL`、`NVDA`、`0700.HK`、`9988.HK`、`600519`、`000001`）
+- 指标卡片：价格、涨跌、当日高低、RSI(14)、MACD Hist、SMA20、SMA50
+- 图表：价格趋势 + 成交量
+- 方向判断：`Strong Bullish / Bullish / Neutral / Bearish / Strong Bearish`
+- 交易计划：买入/做空区间、止损、T1/T2 目标位（基于 ATR 的简化模型）
+- 数据策略：优先读取同域缓存（GitHub Actions 生成的 Yahoo 数据），再尝试网络回退
+- 浏览器缓存：本地缓存最近请求结果，减轻重复请求失败概率
 
 ### 综合分析包含
 
@@ -115,6 +152,21 @@ http(s)://你的服务器域名或IP:8501
 
 ## 部署到 Streamlit Community Cloud
 
+### Streamlit Cloud 就绪检查（推荐先确认）
+
+- 入口文件：`app.py`
+- 依赖文件：`requirements.txt`
+- Python 版本：建议 **3.11**
+- 数据源：Yahoo Finance（若临时失败可重试）
+- 本地语法检查：
+
+```bash
+py -m compileall -q .
+```
+
+> 说明：Streamlit 为服务端 Python 运行模式，浏览器不直接请求第三方行情 API，
+> 因此不会像 GitHub Pages 静态版那样受前端 CORS 限制。
+
 1. 把本项目推到 **GitHub** 公开或私有仓库
 2. 打开 [share.streamlit.io](https://share.streamlit.io) 登录
 3. **New app** → 选仓库
@@ -123,6 +175,12 @@ http(s)://你的服务器域名或IP:8501
 6. Deploy 后用手机浏览器打开 `https://xxx.streamlit.app`
 
 可选：在 Cloud 的 Advanced settings 里确认 `requirements.txt` 被识别。
+
+### 常见问题（Streamlit Cloud）
+
+- 启动失败（ImportError）：确认 `requirements.txt` 已包含依赖并重新 Deploy。
+- 拉取行情失败：通常为 Yahoo 临时网络/频率限制，稍后重试。
+- 页面空白或异常：在 Cloud 的 App logs 查看报错栈并按行修复。
 
 > 期权/行情依赖 Yahoo Finance，Cloud 服务器网络需能访问 Yahoo；若拉取失败请稍后重试。
 
@@ -166,12 +224,24 @@ A 股 6 位代码会自动补全交易所后缀。
 
 ```
 Stock/
-├── app.py              # Streamlit 主界面
-├── stock_service.py    # 行情数据（yfinance）
-├── indicators.py       # 技术指标
-├── charts.py           # Plotly 图表
+├── app.py                              # Streamlit 主界面（完整版）
+├── stock_service.py                    # 行情数据（yfinance）
+├── indicators.py                       # 技术指标
+├── charts.py                           # Plotly 图表
+├── options_*.py                        # 期权策略模块（完整版）
+├── trade_plan.py                       # 交易计划与仓位
+├── ui_mobile.py                        # 手机端样式与适配
+├── index.html                          # GitHub Pages 静态入口（Lite）
+├── web/
+│   ├── app.js                          # 静态版逻辑与指标计算
+│   ├── styles.css                      # 静态版 UI 样式
+│   └── data/quotes.json                # 静态版行情缓存（Actions 生成）
+├── scripts/build_static_data.py        # 生成静态版 Yahoo 缓存
+├── .github/workflows/
+│   ├── github-action-deploy.yml        # GHCR 容器发布（Streamlit）
+│   └── pages-deploy.yml                # GitHub Pages 部署（静态版）
 ├── requirements.txt
-├── watchlist.json      # 运行后自动生成的自选列表
+├── watchlist.json                      # 运行后自动生成（完整版）
 └── README.md
 ```
 
