@@ -186,8 +186,9 @@ function buildPlan(last, bias, score, atr14) {
 }
 
 function parseCsv(text) {
-  const lines = text.trim().split(/\r?\n/);
-  if (lines.length < 3) throw new Error("No enough rows from provider.");
+  const normalized = extractCsvBlock(text);
+  const lines = normalized.trim().split(/\r?\n/);
+  if (lines.length < 3) throw new Error("Not enough rows from provider.");
   const out = [];
   for (let i = 1; i < lines.length; i += 1) {
     const parts = lines[i].split(",");
@@ -207,19 +208,81 @@ function parseCsv(text) {
   return out;
 }
 
-async function fetchViaProxy(rawUrl) {
-  const u = `https://api.allorigins.win/raw?url=${encodeURIComponent(rawUrl)}`;
-  const res = await fetch(u, { cache: "no-store" });
-  if (!res.ok) throw new Error(`Proxy request failed: ${res.status}`);
-  return res.text();
+function extractCsvBlock(text) {
+  if (!text) return "";
+  const rows = text.split(/\r?\n/);
+  const header = "Date,Open,High,Low,Close,Volume";
+  const start = rows.findIndex((r) => r.trim() === header);
+  if (start >= 0) return rows.slice(start).join("\n");
+  return text;
+}
+
+async function fetchText(url, timeoutMs = 12000) {
+  const ctl = new AbortController();
+  const timer = window.setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      cache: "no-store",
+      signal: ctl.signal,
+      mode: "cors",
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.text();
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+function candidateUrls(stooqUrl) {
+  const encoded = encodeURIComponent(stooqUrl);
+  return [
+    { name: "Stooq direct", url: stooqUrl },
+    {
+      name: "AllOrigins raw",
+      url: `https://api.allorigins.win/raw?url=${encoded}`,
+    },
+    {
+      name: "AllOrigins get",
+      url: `https://api.allorigins.win/get?url=${encoded}`,
+    },
+    { name: "corsproxy.io", url: `https://corsproxy.io/?${encoded}` },
+    {
+      name: "r.jina.ai",
+      url: `https://r.jina.ai/http://stooq.com/q/d/l/?s=${stooqUrl.split("s=")[1]}`,
+    },
+  ];
+}
+
+function parseAllOriginsGet(text) {
+  try {
+    const payload = JSON.parse(text);
+    if (payload && typeof payload.contents === "string") {
+      return payload.contents;
+    }
+  } catch (_err) {
+    // Fall through when response is not JSON.
+  }
+  return text;
 }
 
 async function fetchHistory(symbol) {
   const stooq = toStooqSymbol(symbol);
   const stooqUrl = `https://stooq.com/q/d/l/?s=${stooq}&i=d`;
-  const csvText = await fetchViaProxy(stooqUrl);
-  const rows = parseCsv(csvText).slice(-260);
-  return { rows, source: "Stooq via AllOrigins proxy" };
+  const attempts = [];
+  for (const source of candidateUrls(stooqUrl)) {
+    try {
+      let raw = await fetchText(source.url);
+      if (source.name === "AllOrigins get") {
+        raw = parseAllOriginsGet(raw);
+      }
+      const rows = parseCsv(raw).slice(-260);
+      return { rows, source: source.name };
+    } catch (err) {
+      attempts.push(`${source.name}: ${err.message || "failed"}`);
+    }
+  }
+
+  throw new Error(`All providers failed. ${attempts.join(" | ")}`);
 }
 
 function destroyCharts() {
