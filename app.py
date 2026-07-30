@@ -1295,6 +1295,10 @@ elif page == "期权价差":
 
         if not opt_rep.ideas or not opt_rep.best:
             st.warning("暂时算不出可用价差（网络或盘后报价问题）。")
+            st.info(
+                "当前无可用推荐时，不会显示 Greeks 与 1R 仓位建议。"
+                "可尝试把到期天数调到 21/30/45，或在美股交易时段再刷新。"
+            )
         else:
             hi = getattr(opt_rep, "best_winrate", None)
             hi_al = getattr(opt_rep, "best_winrate_aligned", None)
