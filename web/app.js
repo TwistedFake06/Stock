@@ -1,6 +1,8 @@
 const state = {
   chart: null,
   volChart: null,
+  marketCache: null,
+  marketCachePromise: null,
 };
 
 const ui = {
@@ -38,6 +40,17 @@ function toStooqSymbol(normalized) {
     return normalized.slice(0, 6).toLowerCase() + ".cn";
   if (normalized.includes(".")) return normalized.toLowerCase();
   return normalized.toLowerCase() + ".us";
+}
+
+function aliasesFor(symbol) {
+  const out = [symbol.toUpperCase()];
+  if (/^\d{6}$/.test(symbol)) {
+    out.push(symbol[0] === "6" ? `${symbol}.SS` : `${symbol}.SZ`);
+  }
+  if (symbol.endsWith(".SS") || symbol.endsWith(".SZ")) {
+    out.push(symbol.slice(0, 6));
+  }
+  return [...new Set(out.map((x) => x.toUpperCase()))];
 }
 
 function fmt(v, d = 2) {
@@ -266,6 +279,9 @@ function parseAllOriginsGet(text) {
 }
 
 async function fetchHistory(symbol) {
+  const local = await loadLocalHistory(symbol);
+  if (local) return local;
+
   const stooq = toStooqSymbol(symbol);
   const stooqUrl = `https://stooq.com/q/d/l/?s=${stooq}&i=d`;
   const attempts = [];
@@ -276,13 +292,81 @@ async function fetchHistory(symbol) {
         raw = parseAllOriginsGet(raw);
       }
       const rows = parseCsv(raw).slice(-260);
+      if (rows.length >= 20) {
+        saveLocalHistory(symbol, rows);
+      }
       return { rows, source: source.name };
     } catch (err) {
       attempts.push(`${source.name}: ${err.message || "failed"}`);
     }
   }
 
-  throw new Error(`All providers failed. ${attempts.join(" | ")}`);
+  const cache = await loadMarketCache();
+  const supported = (cache?.symbols || []).slice(0, 20).join(", ");
+  throw new Error(
+    `All providers failed. ${attempts.join(" | ")} | Cached symbols: ${supported || "none"}`,
+  );
+}
+
+function saveLocalHistory(symbol, rows) {
+  try {
+    const key = `stock-cache-${symbol.toUpperCase()}`;
+    localStorage.setItem(key, JSON.stringify({ rows, updatedAt: Date.now() }));
+  } catch (_err) {
+    // Ignore localStorage failures (private mode quota, etc.)
+  }
+}
+
+function loadFromLocalStorage(symbol) {
+  try {
+    const key = `stock-cache-${symbol.toUpperCase()}`;
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    if (!obj || !Array.isArray(obj.rows) || obj.rows.length < 20) return null;
+    return obj.rows;
+  } catch (_err) {
+    return null;
+  }
+}
+
+async function loadMarketCache() {
+  if (state.marketCache) return state.marketCache;
+  if (!state.marketCachePromise) {
+    state.marketCachePromise = fetch("web/data/quotes.json", {
+      cache: "no-store",
+      mode: "same-origin",
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((payload) => {
+        state.marketCache = payload || { quotes: {}, symbols: [] };
+        return state.marketCache;
+      })
+      .catch(() => {
+        state.marketCache = { quotes: {}, symbols: [] };
+        return state.marketCache;
+      });
+  }
+  return state.marketCachePromise;
+}
+
+async function loadLocalHistory(symbol) {
+  const cached = loadFromLocalStorage(symbol);
+  if (cached) {
+    return { rows: cached.slice(-260), source: "Local browser cache" };
+  }
+
+  const market = await loadMarketCache();
+  const quoteMap = market?.quotes || {};
+  for (const a of aliasesFor(symbol)) {
+    if (Array.isArray(quoteMap[a]) && quoteMap[a].length >= 20) {
+      return { rows: quoteMap[a].slice(-260), source: "GitHub Pages cache" };
+    }
+  }
+  return null;
 }
 
 function destroyCharts() {

@@ -111,6 +111,7 @@ http(s)://你的服务器域名或IP:8501
 - 部署后访问：`https://twistedfake06.github.io/Stock/`
 - iPhone Safari 可直接访问并输入代码分析（如 `AAPL`、`0700.HK`、`600519`）。
 - 该静态版使用浏览器侧指标计算（SMA/RSI/MACD/多空评分），用于快速参考。
+- 行情数据优先读取同域 `web/data/quotes.json`（由 GitHub Actions 自动更新），可绕过浏览器 CORS 限制。
 
 ## 部署到 Streamlit Community Cloud
 
