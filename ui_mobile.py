@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 PLOTLY_CONFIG = {
     "responsive": True,
@@ -52,6 +53,15 @@ def inject_mobile_css() -> None:
 html, body, [class*="css"] {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+}
+html, body {
+  min-height: 100%;
+  min-height: -webkit-fill-available;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+}
+.stApp {
+  min-height: calc(var(--app-vh, 1vh) * 100);
 }
 .block-container {
   padding-top: 0.8rem !important;
@@ -288,6 +298,9 @@ div[data-testid="stDataFrame"] {
 .stTextInput input, .stNumberInput input {
   border-radius: 8px !important;
 }
+input, select, textarea {
+  font-size: 16px !important; /* prevent iOS auto-zoom on focus */
+}
 
 /* Radio / tabs */
 div[role="radiogroup"] label {
@@ -313,7 +326,7 @@ footer { visibility: hidden; height: 0; }
 .block-container::after {
   content: "";
   display: block;
-  height: env(safe-area-inset-bottom, 0);
+  height: calc(env(safe-area-inset-bottom, 0) + 0.35rem);
 }
 
 /* Alerts slightly softer on dark */
@@ -329,9 +342,9 @@ div[data-testid="stProgress"] > div {
 /* Phone */
 @media (max-width: 768px) {
   .block-container {
-    padding-top: 0.5rem !important;
-    padding-left: 0.6rem !important;
-    padding-right: 0.6rem !important;
+    padding-top: calc(env(safe-area-inset-top, 0) + 0.35rem) !important;
+    padding-left: calc(env(safe-area-inset-left, 0) + 0.6rem) !important;
+    padding-right: calc(env(safe-area-inset-right, 0) + 0.6rem) !important;
   }
   h1 { font-size: 1.35rem !important; color: #e6edf3 !important; }
   h2 { font-size: 1.15rem !important; color: #e6edf3 !important; }
@@ -370,6 +383,41 @@ div[data-testid="stProgress"] > div {
 </style>
         """,
         unsafe_allow_html=True,
+    )
+
+
+def inject_ios_safari_support() -> None:
+    """Inject viewport/meta tweaks for iPhone Safari rendering behavior."""
+    components.html(
+        """
+<script>
+(() => {
+  const ensureMeta = (name, content, key = 'name') => {
+    let tag = document.head.querySelector(`meta[${key}="${name}"]`);
+    if (!tag) {
+      tag = document.createElement('meta');
+      tag.setAttribute(key, name);
+      document.head.appendChild(tag);
+    }
+    tag.setAttribute('content', content);
+  };
+
+  ensureMeta('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover');
+  ensureMeta('apple-mobile-web-app-capable', 'yes');
+  ensureMeta('apple-mobile-web-app-status-bar-style', 'black-translucent');
+  ensureMeta('theme-color', '#0d1117');
+
+  const setVh = () => {
+    const vh = window.innerHeight * 0.01;
+    document.documentElement.style.setProperty('--app-vh', `${vh}px`);
+  };
+  setVh();
+  window.addEventListener('resize', setVh, { passive: true });
+})();
+</script>
+        """,
+        height=0,
+        width=0,
     )
 
 
