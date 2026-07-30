@@ -30,10 +30,22 @@ jobs:
           python-version: "3.11"
 
       - name: Build static market cache
+        shell: bash
         run: |
           python -m pip install --upgrade pip
           pip install yfinance pandas requests
-          python scripts/build_static_data.py
+          SCRIPT_PATH="$(find . -type f -name build_static_data.py | head -n 1)"
+          if [ -z "$SCRIPT_PATH" ]; then
+            echo "build_static_data.py not found in checkout"
+            echo "Current directory: $(pwd)"
+            echo "Top-level files:"
+            ls -la
+            echo "Sample tree (depth 3):"
+            find . -maxdepth 3 -type f | sort
+            exit 1
+          fi
+          echo "Using data builder script: $SCRIPT_PATH"
+          python "$SCRIPT_PATH"
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
