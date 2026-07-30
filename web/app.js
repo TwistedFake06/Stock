@@ -333,22 +333,31 @@ function loadFromLocalStorage(symbol) {
 async function loadMarketCache() {
   if (state.marketCache) return state.marketCache;
   if (!state.marketCachePromise) {
-    state.marketCachePromise = fetch("web/data/quotes.json", {
-      cache: "no-store",
-      mode: "same-origin",
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then((payload) => {
-        state.marketCache = payload || { quotes: {}, symbols: [] };
-        return state.marketCache;
-      })
-      .catch(() => {
-        state.marketCache = { quotes: {}, symbols: [] };
-        return state.marketCache;
-      });
+    state.marketCachePromise = (async () => {
+      const candidates = ["web/data/quotes.json", "quotes.json"];
+      for (const p of candidates) {
+        try {
+          const res = await fetch(p, {
+            cache: "no-store",
+            mode: "same-origin",
+          });
+          if (!res.ok) continue;
+          const payload = await res.json();
+          if (
+            payload &&
+            payload.quotes &&
+            Object.keys(payload.quotes).length > 0
+          ) {
+            state.marketCache = payload;
+            return state.marketCache;
+          }
+        } catch (_err) {
+          // Try next candidate path.
+        }
+      }
+      state.marketCache = { quotes: {}, symbols: [] };
+      return state.marketCache;
+    })();
   }
   return state.marketCachePromise;
 }
