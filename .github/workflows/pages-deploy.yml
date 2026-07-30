@@ -39,68 +39,8 @@ jobs:
             echo "Using data builder script: $SCRIPT_PATH"
             python "$SCRIPT_PATH"
           else
-            echo "build_static_data.py not found; using inline Yahoo cache builder"
-            python - <<'PY'
-from __future__ import annotations
-
-import json
-from datetime import datetime, timezone
-from pathlib import Path
-
-import yfinance as yf
-
-SYMBOLS = [
-  "AAPL", "NVDA", "MSFT", "TSLA", "AMZN", "GOOGL", "META", "SPY", "QQQ",
-  "0700.HK", "9988.HK", "3690.HK", "0005.HK", "600519.SS", "000001.SZ", "300750.SZ", "601318.SS",
-]
-
-root = Path('.')
-out_web = root / 'web' / 'data' / 'quotes.json'
-out_root = root / 'quotes.json'
-
-def fetch_rows(symbol: str) -> list[dict]:
-  hist = yf.Ticker(symbol).history(period='2y', interval='1d', auto_adjust=False)
-  if hist is None or hist.empty:
-    return []
-  hist = hist.dropna(subset=['Close']).tail(520)
-  rows: list[dict] = []
-  for idx, row in hist.iterrows():
-    rows.append({
-      'date': idx.strftime('%Y-%m-%d'),
-      'open': float(row.get('Open', 0.0) or 0.0),
-      'high': float(row.get('High', 0.0) or 0.0),
-      'low': float(row.get('Low', 0.0) or 0.0),
-      'close': float(row.get('Close', 0.0) or 0.0),
-      'volume': float(row.get('Volume', 0.0) or 0.0),
-    })
-  return rows
-
-quotes = {}
-failed = {}
-for s in SYMBOLS:
-  try:
-    rows = fetch_rows(s)
-    if len(rows) >= 30:
-      quotes[s.upper()] = rows
-    else:
-      failed[s] = 'insufficient rows'
-  except Exception as exc:  # noqa: BLE001
-    failed[s] = str(exc)
-
-payload = {
-  'updatedAt': datetime.now(timezone.utc).isoformat(),
-  'count': len(quotes),
-  'symbols': sorted(quotes.keys()),
-  'quotes': quotes,
-  'failed': failed,
-}
-
-out_web.parent.mkdir(parents=True, exist_ok=True)
-data = json.dumps(payload, ensure_ascii=True)
-out_web.write_text(data, encoding='utf-8')
-out_root.write_text(data, encoding='utf-8')
-print(f'Wrote {out_web} and {out_root} with {len(quotes)} symbols')
-PY
+            echo "build_static_data.py not found; writing empty cache payload"
+            python -c "import json,datetime,pathlib; p={'updatedAt':datetime.datetime.utcnow().isoformat()+'Z','count':0,'symbols':[],'quotes':{},'failed':{'build_static_data.py':'missing in checkout'}}; pathlib.Path('web/data').mkdir(parents=True,exist_ok=True); s=json.dumps(p,ensure_ascii=True); pathlib.Path('web/data/quotes.json').write_text(s,encoding='utf-8'); pathlib.Path('quotes.json').write_text(s,encoding='utf-8'); print('Wrote fallback cache')"
           fi
 
       - name: Setup Pages
