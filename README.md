@@ -104,6 +104,14 @@ http(s)://你的服务器域名或IP:8501
 
 如果你希望我下一步直接补一个「自动部署到具体云平台（如 Render/Fly.io/Azure）」的 GitHub Action，我可以按你选的平台继续配置。
 
+## GitHub Pages 访问说明（纯静态版）
+
+- 已新增 `index.html` + `web/` 静态前端页面，支持在 GitHub Pages 直接运行（不依赖 Streamlit 服务端）。
+- 工作流：`.github/workflows/pages-deploy.yml`，推送到 `main` 会自动部署到 Pages。
+- 部署后访问：`https://twistedfake06.github.io/Stock/`
+- iPhone Safari 可直接访问并输入代码分析（如 `AAPL`、`0700.HK`、`600519`）。
+- 该静态版使用浏览器侧指标计算（SMA/RSI/MACD/多空评分），用于快速参考。
+
 ## 部署到 Streamlit Community Cloud
 
 1. 把本项目推到 **GitHub** 公开或私有仓库

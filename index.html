@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#f8f7f4" />
+    <title>Stock Analyzer Lite</title>
+    <link rel="stylesheet" href="web/styles.css" />
+    <script
+      src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"
+      defer
+    ></script>
+    <script src="web/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app">
+      <header class="hero">
+        <h1>Stock Analyzer Lite</h1>
+        <p>
+          GitHub Pages static version. Input a symbol and get chart, momentum
+          indicators, bias score, and entry/target plan on iPhone Safari.
+        </p>
+        <form id="searchForm" class="search">
+          <input
+            id="symbolInput"
+            type="text"
+            value="AAPL"
+            placeholder="AAPL / 0700.HK / 600519"
+          />
+          <button type="submit">Analyze</button>
+        </form>
+        <div class="stack">
+          <span class="tag" data-symbol="AAPL">AAPL</span>
+          <span class="tag" data-symbol="NVDA">NVDA</span>
+          <span class="tag" data-symbol="0700.HK">0700.HK</span>
+          <span class="tag" data-symbol="9988.HK">9988.HK</span>
+          <span class="tag" data-symbol="600519">600519</span>
+          <span class="tag" data-symbol="000001">000001</span>
+        </div>
+        <p id="statusText" class="note">Ready.</p>
+        <p id="companyText" class="note"></p>
+        <p id="errorText" class="err"></p>
+      </header>
+
+      <section class="grid">
+        <article class="card metric">
+          <div class="label">Price</div>
+          <div id="vPrice" class="value">—</div>
+        </article>
+        <article class="card metric">
+          <div class="label">Change</div>
+          <div id="vChg" class="value">—</div>
+        </article>
+        <article class="card metric">
+          <div class="label">Day High</div>
+          <div id="vHigh" class="value">—</div>
+        </article>
+        <article class="card metric">
+          <div class="label">Day Low</div>
+          <div id="vLow" class="value">—</div>
+        </article>
+        <article class="card metric">
+          <div class="label">RSI(14)</div>
+          <div id="vRsi" class="value">—</div>
+        </article>
+        <article class="card metric">
+          <div class="label">MACD Hist</div>
+          <div id="vMacd" class="value">—</div>
+        </article>
+        <article class="card metric">
+          <div class="label">SMA20</div>
+          <div id="vSma20" class="value">—</div>
+        </article>
+        <article class="card metric">
+          <div class="label">SMA50</div>
+          <div id="vSma50" class="value">—</div>
+        </article>
+      </section>
+
+      <section class="two">
+        <article class="card section">
+          <h2>Price and Trend</h2>
+          <div style="height: 320px"><canvas id="priceChart"></canvas></div>
+        </article>
+        <article class="card section">
+          <h2>Bias and Trade Plan</h2>
+          <div class="bias">
+            <strong id="biasName">—</strong>
+            <div id="biasScore" class="score">Score —</div>
+          </div>
+          <pre id="planBox" class="plan">No data loaded.</pre>
+          <p class="note">
+            Model: static client-side technical scoring for quick directional
+            view.
+          </p>
+        </article>
+      </section>
+
+      <section class="card section">
+        <h2>Volume</h2>
+        <div style="height: 220px"><canvas id="volChart"></canvas></div>
+      </section>
+
+      <footer class="footer">
+        Data source: Stooq through public proxy. For educational use only, not
+        investment advice.
+      </footer>
+    </div>
+  </body>
+</html>
