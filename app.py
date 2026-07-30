@@ -59,6 +59,8 @@ try:
         legs_to_frame,
         options_symbol,
     )
+    from options_position import calc_options_position
+    from options_greeks import calc_spread_greeks
 
     try:
         from options_methods import methods_to_rows
@@ -1214,6 +1216,25 @@ elif page == "期权价差":
     with c3:
         width_mode = st.selectbox("宽度", ["自动", "1", "2", "5", "10"], index=0)
 
+    st.markdown("#### 風險參數（1R 風控）")
+    r1, r2 = st.columns(2)
+    with r1:
+        account_size = st.number_input(
+            "帳戶資金 (USD)",
+            min_value=1000.0,
+            value=50000.0,
+            step=1000.0,
+            help="你的交易帳戶總資金",
+        )
+    with r2:
+        risk_per_trade = st.number_input(
+            "單筆最大風險 1R (USD)",
+            min_value=50.0,
+            value=500.0,
+            step=50.0,
+            help="單筆最多願意虧的金額（嚴格風控）",
+        )
+
     with st.spinner("扫描方向与价差…"):
         hist_opt = fetch_history(opt_sym, period="6mo", interval="1d")
         width_val = None if width_mode == "自动" else float(width_mode)
@@ -1400,6 +1421,44 @@ elif page == "期权价差":
                 """,
                 unsafe_allow_html=True,
             )
+
+            try:
+                greeks = (
+                    calc_spread_greeks(best.legs, opt_rep.spot, best.dte)
+                    if best.legs and len(best.legs) >= 2
+                    else None
+                )
+                pos_plan = calc_options_position(
+                    max_loss_per_contract=best.max_loss,
+                    max_profit_per_contract=best.max_profit,
+                    account_size=account_size,
+                    risk_per_trade=risk_per_trade,
+                )
+            except Exception:
+                greeks = None
+                pos_plan = None
+
+            if greeks is not None:
+                st.markdown("#### Greeks")
+                g1, g2, g3, g4 = st.columns(4)
+                g1.metric("短腿 Delta", f"{greeks.short_delta:.2f}")
+                g2.metric("淨 Delta", f"{greeks.net_delta:.2f}")
+                g3.metric("淨 Theta /日", f"${greeks.net_theta:.1f}")
+                g4.metric("淨 Vega", f"{greeks.net_vega:.1f}")
+
+            if pos_plan is not None:
+                st.markdown("#### 倉位建議（依你的 1R 風控）")
+                if pos_plan.contracts >= 1:
+                    p1, p2, p3, p4 = st.columns(4)
+                    p1.metric("建議張數", f"{pos_plan.contracts} 張")
+                    p2.metric("總最大虧損", f"${pos_plan.total_max_loss:.0f}")
+                    p3.metric("總最大利潤", f"${pos_plan.total_max_profit:.0f}")
+                    p4.metric("盈虧比", f"{pos_plan.r_multiple:.2f}")
+                    st.caption(f"風險佔帳戶：{pos_plan.risk_pct:.2f}%")
+                    for note in pos_plan.notes:
+                        st.info(note)
+                else:
+                    st.error(pos_plan.notes[0] if pos_plan.notes else "風險過大，不建議開倉")
 
             steps = plain_spread_steps(best)
             steps_html = '<div class="glass-card"><p class="section-label">How to trade · 两步</p>'
