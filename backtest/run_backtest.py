@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from datetime import date
 from pathlib import Path
 
@@ -28,12 +29,21 @@ def rounded_strike(price: float, increment: float = 1.0) -> float:
     return float(np.floor(price / increment) * increment)
 
 
-def run_backtest() -> pd.DataFrame:
+def run_backtest(
+    symbol: str = SYMBOL,
+    start_date: str = START_DATE,
+    end_date: str = END_DATE,
+    hold_days: int = HOLD_DAYS,
+    otm_pct: float = OTM_PCT,
+    spread_width: float = SPREAD_WIDTH,
+    min_credit_width_ratio: float = MIN_CREDIT_WIDTH_RATIO,
+) -> pd.DataFrame:
     """Load data, evaluate bullish entries, then save and return the trade log."""
-    print(f"Downloading {SYMBOL} daily data from {START_DATE} to {END_DATE}...")
-    prices = load_daily(SYMBOL, START_DATE, END_DATE)
+    symbol = symbol.upper().strip()
+    print(f"Downloading {symbol} daily data from {start_date} to {end_date}...")
+    prices = load_daily(symbol, start_date, end_date)
     if prices.empty:
-        raise RuntimeError(f"No daily data returned for {SYMBOL}.")
+        raise RuntimeError(f"No daily data returned for {symbol}.")
 
     prices["SMA20"] = prices["Close"].rolling(20).mean()
     prices["SMA50"] = prices["Close"].rolling(50).mean()
@@ -42,26 +52,26 @@ def run_backtest() -> pd.DataFrame:
 
     trades: list[dict[str, object]] = []
     print("Evaluating bullish Bull Put entries...")
-    for index in range(50, len(prices) - HOLD_DAYS):
+    for index in range(50, len(prices) - hold_days):
         row = prices.iloc[index]
         if pd.isna(row["hist_vol"]) or not (row["Close"] > row["SMA20"] > row["SMA50"]):
             continue
 
         spot = float(row["Close"])
-        short_strike = rounded_strike(spot * (1 - OTM_PCT))
-        long_strike = short_strike - SPREAD_WIDTH
+        short_strike = rounded_strike(spot * (1 - otm_pct))
+        long_strike = short_strike - spread_width
         spread = estimate_bull_put(
             spot=spot,
             short_strike=short_strike,
             long_strike=long_strike,
-            dte=HOLD_DAYS,
+            dte=hold_days,
             volatility=float(row["hist_vol"]),
         )
-        if spread["credit_width_ratio"] < MIN_CREDIT_WIDTH_RATIO or spread["max_loss"] <= 0:
+        if spread["credit_width_ratio"] < min_credit_width_ratio or spread["max_loss"] <= 0:
             continue
 
-        future_closes = prices["Close"].iloc[index + 1 : index + 1 + HOLD_DAYS].astype(float).tolist()
-        days_held, pnl, exit_reason = simulate_trade(future_closes, spread, HOLD_DAYS)
+        future_closes = prices["Close"].iloc[index + 1 : index + 1 + hold_days].astype(float).tolist()
+        days_held, pnl, exit_reason = simulate_trade(future_closes, spread, hold_days)
         r_multiple = pnl / spread["max_loss"]
         trades.append(
             {
@@ -86,12 +96,12 @@ def run_backtest() -> pd.DataFrame:
     trade_log = pd.DataFrame(trades)
     results_dir = Path(__file__).resolve().parent / "results"
     results_dir.mkdir(exist_ok=True)
-    output_path = results_dir / f"{SYMBOL.lower()}_bull_put_trades.csv"
+    output_path = results_dir / f"{symbol.lower()}_bull_put_trades.csv"
     trade_log.to_csv(output_path, index=False)
 
     summary = summarize_trades(trade_log)
     print(f"Saved {len(trade_log)} trades to {output_path}")
-    print(f"\n===== Backtest Result ({SYMBOL} Bull Put) =====")
+    print(f"\n===== Backtest Result ({symbol} Bull Put) =====")
     if "error" in summary:
         print(summary["error"])
     else:
@@ -104,5 +114,32 @@ def run_backtest() -> pd.DataFrame:
     return trade_log
 
 
+def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for quick symbol/parameter switching."""
+    parser = argparse.ArgumentParser(description="Run Bull Put backtest with daily data.")
+    parser.add_argument("--symbol", default=SYMBOL, help="Ticker symbol, e.g. SPY/VOO/QQQ")
+    parser.add_argument("--start", default=START_DATE, help="Backtest start date YYYY-MM-DD")
+    parser.add_argument("--end", default=END_DATE, help="Backtest end date YYYY-MM-DD")
+    parser.add_argument("--hold-days", type=int, default=HOLD_DAYS, help="Max holding days")
+    parser.add_argument("--otm-pct", type=float, default=OTM_PCT, help="OTM percentage, e.g. 0.03")
+    parser.add_argument("--spread-width", type=float, default=SPREAD_WIDTH, help="Spread width in dollars")
+    parser.add_argument(
+        "--min-cw-ratio",
+        type=float,
+        default=MIN_CREDIT_WIDTH_RATIO,
+        help="Minimum credit/width ratio",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    run_backtest()
+    args = parse_args()
+    run_backtest(
+        symbol=args.symbol,
+        start_date=args.start,
+        end_date=args.end,
+        hold_days=args.hold_days,
+        otm_pct=args.otm_pct,
+        spread_width=args.spread_width,
+        min_credit_width_ratio=args.min_cw_ratio,
+    )

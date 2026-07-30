@@ -1,0 +1,2 @@
+entry_date,entry_price,short_strike,long_strike,hist_vol,credit,max_profit,max_loss,breakeven,credit_width_ratio,days_held,pnl,r_multiple,is_win,exit_reason
+2022-11-11,347.58,337.0,332.0,0.295,1.27,127.17,372.83,335.73,0.254,1,63.59,0.171,True,50%_profit

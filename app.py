@@ -297,6 +297,7 @@ with st.sidebar:
         "功能页面",
         [
             "期权价差",
+            "回测复盘",
             "行情看板",
             "多空分析",
             "入场与目标价",
@@ -1778,6 +1779,111 @@ elif page == "期权价差":
 
             if not is_options_eligible(symbol):
                 st.info(f"侧边栏是 `{symbol}`，本页在分析 `{opt_sym}`。")
+
+
+# ===================== 回测复盘 =====================
+elif page == "回测复盘":
+    st.header("回测复盘 · Bull Put")
+    st.caption("读取 backtest/results 下的交易日志 CSV，查看绩效与分布。")
+
+    results_dir = Path(__file__).resolve().parent / "backtest" / "results"
+    file_map: dict[str, Path] = {}
+    for sym in ("SPY", "VOO", "QQQ"):
+        p = results_dir / f"{sym.lower()}_bull_put_trades.csv"
+        if p.exists():
+            file_map[sym] = p
+
+    if not file_map:
+        st.warning("尚未找到回测结果文件。")
+        st.info("请先运行：backtest\\run.bat 或 py -m backtest.run_backtest --symbol SPY")
+    else:
+        sel = st.selectbox("选择标的", list(file_map.keys()), index=0)
+        csv_path = file_map[sel]
+
+        b1, b2 = st.columns(2)
+        with b1:
+            rerun_one = st.button(f"重跑 {sel} 回测", type="primary", use_container_width=True)
+        with b2:
+            rerun_all = st.button("重跑 SPY / VOO / QQQ", use_container_width=True)
+
+        if rerun_one or rerun_all:
+            targets = [sel] if rerun_one else ["SPY", "VOO", "QQQ"]
+            with st.spinner(f"正在回测：{', '.join(targets)}..."):
+                try:
+                    from backtest.run_backtest import run_backtest as run_vertical_backtest
+
+                    for t in targets:
+                        run_vertical_backtest(symbol=t)
+                    st.success(f"回测完成：{', '.join(targets)}")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"回测执行失败：{exc}")
+
+        try:
+            trades = pd.read_csv(csv_path)
+        except Exception as exc:
+            st.error(f"读取失败：{exc}")
+            trades = pd.DataFrame()
+
+        st.caption(f"文件：{csv_path}")
+        if trades.empty:
+            st.warning("该文件没有交易记录。")
+        else:
+            if "entry_date" in trades.columns:
+                trades["entry_date"] = pd.to_datetime(trades["entry_date"], errors="coerce")
+                trades = trades.sort_values("entry_date").reset_index(drop=True)
+
+            r = trades["r_multiple"].astype(float)
+            pnl = trades["pnl"].astype(float)
+            wins = (r > 0).sum()
+            losses = (r < 0).sum()
+            win_rate = (wins / len(trades) * 100) if len(trades) else 0.0
+            avg_r = float(r.mean()) if len(r) else 0.0
+            neg_sum = abs(float(r[r < 0].sum()))
+            pos_sum = float(r[r > 0].sum())
+            profit_factor = (pos_sum / neg_sum) if neg_sum > 0 else np.inf
+
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("Total trades", f"{len(trades)}")
+            m2.metric("Win rate", f"{win_rate:.1f}%")
+            m3.metric("Average R", f"{avg_r:.3f}")
+            m4.metric("Expectancy", f"{avg_r:.3f}R")
+            m5.metric("Profit Factor", "inf" if np.isinf(profit_factor) else f"{profit_factor:.2f}")
+            st.caption(f"Avg P&L: ${pnl.mean():.2f} · Wins: {wins} · Losses: {losses}")
+
+            # Equity curve from sequential trades
+            eq_df = trades.copy()
+            eq_df["cum_pnl"] = pnl.cumsum()
+            if "entry_date" in eq_df.columns and eq_df["entry_date"].notna().any():
+                curve = eq_df[["entry_date", "cum_pnl"]].dropna().set_index("entry_date")
+                st.subheader("累积 P&L 曲线")
+                st.line_chart(curve)
+            else:
+                st.subheader("累积 P&L 曲线")
+                st.line_chart(eq_df[["cum_pnl"]])
+
+            # R-multiple histogram (0.25R bucket)
+            st.subheader("R 倍数分布")
+            r_vals = r.dropna().to_numpy()
+            if len(r_vals) >= 1:
+                low = np.floor(r_vals.min() * 4) / 4
+                high = np.ceil(r_vals.max() * 4) / 4
+                if low == high:
+                    low -= 0.25
+                    high += 0.25
+                bins = np.arange(low, high + 0.25, 0.25)
+                hist, edges = np.histogram(r_vals, bins=bins)
+                labels = [f"{edges[i]:.2f}~{edges[i + 1]:.2f}" for i in range(len(edges) - 1)]
+                hist_df = pd.DataFrame({"R区间": labels, "笔数": hist}).set_index("R区间")
+                st.bar_chart(hist_df)
+            else:
+                st.info("暂无可用于分布图的 R 倍数数据。")
+
+            show = trades.copy()
+            if "entry_date" in show.columns:
+                show["entry_date"] = pd.to_datetime(show["entry_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+            st.subheader("交易明细")
+            st.dataframe(show.iloc[::-1], use_container_width=True, hide_index=True)
 
 
 # ===================== 技术分析 =====================
