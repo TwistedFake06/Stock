@@ -1,2 +1,2 @@
-entry_date,entry_price,short_strike,long_strike,hist_vol,credit,max_profit,max_loss,breakeven,credit_width_ratio,days_held,pnl,r_multiple,is_win,exit_reason
-2022-11-16,376.39,365.0,360.0,0.2895,1.27,127.03,372.97,363.73,0.254,1,63.52,0.17,True,50%_profit
+entry_date,entry_price,strategy,short_strike,long_strike,hist_vol,credit,max_profit,max_loss,breakeven,credit_width_ratio,days_held,pnl,r_multiple,is_win,exit_reason,commission_rt,slip_per_share,engine
+2022-11-16,376.39,bull_put,365.0,360.0,0.2895,1.27,127.03,372.97,363.73,0.254,5,64.51,0.173,True,50%_mtm_tp,2.6,0.03,bs_mtm_v3
