@@ -9,7 +9,8 @@ def add_sma(df: pd.DataFrame, windows: list[int] | None = None) -> pd.DataFrame:
     windows = windows or [5, 20, 60]
     out = df.copy()
     for w in windows:
-        out[f"SMA{w}"] = out["Close"].rolling(window=w, min_periods=1).mean()
+        # Require full window so SMA60 is a true 60-bar average (NaN until warm)
+        out[f"SMA{w}"] = out["Close"].rolling(window=w, min_periods=w).mean()
     return out
 
 
@@ -27,8 +28,8 @@ def add_bollinger(
     num_std: float = 2.0,
 ) -> pd.DataFrame:
     out = df.copy()
-    mid = out["Close"].rolling(window=window, min_periods=1).mean()
-    std = out["Close"].rolling(window=window, min_periods=1).std()
+    mid = out["Close"].rolling(window=window, min_periods=window).mean()
+    std = out["Close"].rolling(window=window, min_periods=window).std()
     out["BB_MID"] = mid
     out["BB_UPPER"] = mid + num_std * std
     out["BB_LOWER"] = mid - num_std * std

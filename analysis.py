@@ -14,6 +14,10 @@ import pandas as pd
 
 from indicators import enrich
 
+# Label cutoffs for score ∈ [-100, 100]. Keep in sync with web/app.js BIAS_* constants.
+BIAS_STRONG_THRESHOLD = 45
+BIAS_MILD_THRESHOLD = 18
+
 
 @dataclass
 class Signal:
@@ -53,13 +57,13 @@ def _safe_float(series: pd.Series, idx: int = -1) -> float | None:
 
 
 def _bias_from_score(score: float) -> str:
-    if score >= 45:
+    if score >= BIAS_STRONG_THRESHOLD:
         return "强烈看多"
-    if score >= 18:
+    if score >= BIAS_MILD_THRESHOLD:
         return "看多"
-    if score <= -45:
+    if score <= -BIAS_STRONG_THRESHOLD:
         return "强烈看空"
-    if score <= -18:
+    if score <= -BIAS_MILD_THRESHOLD:
         return "看空"
     return "中性"
 

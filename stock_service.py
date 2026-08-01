@@ -37,6 +37,9 @@ INTERVAL_MAP = {
     "月线": "1mo",
 }
 
+# Lazy Streamlit cache wrapper (works on Cloud + local streamlit run)
+_st_history_cached = None
+
 
 def normalize_symbol(symbol: str) -> str:
     """Normalize user input to a Yahoo Finance ticker."""
@@ -44,16 +47,20 @@ def normalize_symbol(symbol: str) -> str:
     if not s:
         return s
 
-    # Pure 6-digit China A-share codes
+    # Pure 6-digit China A-share / Beijing codes
     if s.isdigit() and len(s) == 6:
-        # Shanghai: 6xxxxx, Shenzhen: 0xxxxx / 3xxxxx
+        # Shanghai: 6xxxxx (incl. STAR 688xxx)
         if s.startswith("6"):
             return f"{s}.SS"
+        # Shenzhen: 0xxxxx / 3xxxxx
         if s.startswith(("0", "3")):
             return f"{s}.SZ"
+        # Beijing Stock Exchange: 8xxxxx / 4xxxxx
+        if s.startswith(("8", "4")):
+            return f"{s}.BJ"
         return s
 
-    # Allow 600519.SS / 000001.SZ as-is
+    # Allow 600519.SS / 000001.SZ / 830799.BJ as-is
     return s
 
 
@@ -61,14 +68,17 @@ def get_ticker(symbol: str) -> yf.Ticker:
     return yf.Ticker(normalize_symbol(symbol))
 
 
-def fetch_history(
+def _fetch_history_uncached(
     symbol: str,
     period: str = "1y",
     interval: str = "1d",
 ) -> pd.DataFrame:
-    """Download OHLCV history for a symbol."""
+    """Download OHLCV history for a symbol (no cache)."""
     ticker = get_ticker(symbol)
-    df = ticker.history(period=period, interval=interval, auto_adjust=True)
+    try:
+        df = ticker.history(period=period, interval=interval, auto_adjust=True)
+    except Exception:
+        return pd.DataFrame()
     if df is None or df.empty:
         return pd.DataFrame()
     df = df.reset_index()
@@ -79,6 +89,65 @@ def fetch_history(
         df = df.rename(columns={"Datetime": "Date"})
         df["Date"] = pd.to_datetime(df["Date"])
     return df
+
+
+@lru_cache(maxsize=64)
+def _fetch_history_lru(
+    symbol: str,
+    period: str,
+    interval: str,
+    _bucket: str,
+) -> pd.DataFrame:
+    """Process-local fallback when Streamlit cache is unavailable (CLI/backtest)."""
+    return _fetch_history_uncached(symbol, period, interval)
+
+
+def _running_under_streamlit() -> bool:
+    """True only inside an active Streamlit script run (Cloud or local)."""
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        return get_script_run_ctx() is not None
+    except Exception:
+        return False
+
+
+def fetch_history(
+    symbol: str,
+    period: str = "1y",
+    interval: str = "1d",
+) -> pd.DataFrame:
+    """
+    Download OHLCV history.
+
+    Caching strategy (Cloud + local safe):
+    - Active Streamlit session: ``st.cache_data`` TTL 5 minutes
+    - CLI / backtest / unit tests: time-bucketed ``lru_cache``
+
+    Always returns a copy so callers can mutate safely.
+    """
+    global _st_history_cached
+    sym = normalize_symbol(symbol)
+    result: pd.DataFrame | None = None
+
+    if _running_under_streamlit():
+        try:
+            import streamlit as st
+
+            if _st_history_cached is None:
+                _st_history_cached = st.cache_data(ttl=300, show_spinner=False)(
+                    _fetch_history_uncached
+                )
+            result = _st_history_cached(sym, period, interval)
+        except Exception:
+            result = None
+
+    if result is None:
+        result = _fetch_history_lru(sym, period, interval, cache_bucket(5))
+
+    if result is None or (isinstance(result, pd.DataFrame) and result.empty):
+        return pd.DataFrame()
+    return result.copy()
 
 
 def fetch_info(symbol: str) -> dict[str, Any]:

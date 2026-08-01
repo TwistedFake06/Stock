@@ -56,7 +56,8 @@ def to_rows(df: pd.DataFrame) -> list[dict]:
 
 def fetch_symbol(symbol: str) -> list[dict]:
     ticker = yf.Ticker(symbol)
-    hist = ticker.history(period="2y", interval="1d", auto_adjust=False)
+    # Match Streamlit stock_service (auto_adjust=True) so Lite vs full prices align
+    hist = ticker.history(period="2y", interval="1d", auto_adjust=True)
     return to_rows(hist)
 
 

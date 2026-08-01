@@ -32,6 +32,9 @@ jobs:
       - name: Syntax check
         run: python -m compileall -q .
 
+      - name: Unit tests (no network)
+        run: python -m unittest discover -s tests -v
+
   deploy-ghcr:
     runs-on: ubuntu-latest
     needs: validate

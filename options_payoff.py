@@ -17,14 +17,35 @@ def _norm_cdf(x: float) -> float:
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
+def _leg_entry_price(leg: Any) -> float:
+    """
+    Entry premium per share used for P&L.
+
+    Prefer natural fill (sell@bid / buy@ask) so ladder matches KPI max profit/loss;
+    fall back to mid when fill is missing or zero.
+    """
+    fill = getattr(leg, "fill", None)
+    try:
+        if fill is not None and float(fill) > 0:
+            return float(fill)
+    except (TypeError, ValueError):
+        pass
+    try:
+        mid = float(getattr(leg, "mid", 0) or 0)
+    except (TypeError, ValueError):
+        mid = 0.0
+    return mid
+
+
 def payoff_per_share(idea: Any, underlying: float) -> float:
     """到期结算盈亏（$/股，未×100）。不行权也适用。"""
     pnl = 0.0
     for leg in idea.legs:
+        entry = _leg_entry_price(leg)
         if leg.side == "buy":
-            pnl -= leg.mid
+            pnl -= entry
         else:
-            pnl += leg.mid
+            pnl += entry
         if leg.right == "call":
             intrinsic = max(underlying - leg.strike, 0.0)
         else:

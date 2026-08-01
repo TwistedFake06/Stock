@@ -43,13 +43,23 @@ jobs:
             python -c "import json,datetime,pathlib; p={'updatedAt':datetime.datetime.utcnow().isoformat()+'Z','count':0,'symbols':[],'quotes':{},'failed':{'build_static_data.py':'missing in checkout'}}; pathlib.Path('web/data').mkdir(parents=True,exist_ok=True); s=json.dumps(p,ensure_ascii=True); pathlib.Path('web/data/quotes.json').write_text(s,encoding='utf-8'); pathlib.Path('quotes.json').write_text(s,encoding='utf-8'); print('Wrote fallback cache')"
           fi
 
+      - name: Stage static site only
+        shell: bash
+        run: |
+          mkdir -p _site/web/data
+          cp index.html _site/
+          cp -r web/* _site/web/
+          # Keep root quotes.json fallback if present
+          if [ -f quotes.json ]; then cp quotes.json _site/quotes.json; fi
+          if [ -f .nojekyll ]; then cp .nojekyll _site/; fi
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: _site
 
       - name: Deploy to GitHub Pages
         id: deployment

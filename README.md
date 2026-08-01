@@ -224,13 +224,21 @@ A 股 6 位代码会自动补全交易所后缀。
 
 ```
 Stock/
-├── app.py                              # Streamlit 主界面（完整版）
-├── stock_service.py                    # 行情数据（yfinance）
+├── app.py                              # Streamlit 入口（Cloud / 本地；薄路由）
+├── views/                              # 各功能页（勿改名 pages/，避免 multipage）
+│   ├── common.py                       # 共用 UI 助手
+│   ├── options_page.py / dashboard.py  # …
+│   └── …
+├── stock_service.py                    # 行情数据（yfinance + 缓存）
 ├── indicators.py                       # 技术指标
+├── analysis.py                         # 多空评分（完整版）
 ├── charts.py                           # Plotly 图表
-├── options_*.py                        # 期权策略模块（完整版）
+├── options_spreads.py                  # 期权 facade（对外统一 import）
+├── options_models.py / _builders.py …  # 期权拆分实现（models/chain/scoring/analyze）
+├── options_payoff.py / _greeks.py …    # 盈亏表、Greeks、仓位
 ├── trade_plan.py                       # 交易计划与仓位
 ├── ui_mobile.py                        # 手机端样式与适配
+├── tests/                              # unittest（无网络）
 ├── index.html                          # GitHub Pages 静态入口（Lite）
 ├── web/
 │   ├── app.js                          # 静态版逻辑与指标计算
@@ -248,5 +256,8 @@ Stock/
 ## 注意
 
 - 数据来自 Yahoo Finance，可能有延迟或个别 A 股字段不全。
-- **仅供学习与研究，不构成任何投资建议。**
+- **定位：实盘辅助工具**
+  - POP + **到期 EV**（分段盈亏积分）+ **管理 EV**（50% 止盈 / 2R 止损路径）
+  - 回测引擎 `bs_mtm_v3`：Bull Put / Bear Call、BS 盯市、佣金+摩擦、单仓不重叠
+  - 数据源可能延迟，**不构成投资建议 / 非自动下单**
 - 若网络访问 Yahoo 受限，请检查代理 / 防火墙设置。

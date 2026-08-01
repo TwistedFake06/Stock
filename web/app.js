@@ -28,10 +28,20 @@ function normalizeSymbol(raw) {
   const s = (raw || "").trim().toUpperCase();
   if (!s) return "";
   if (/^\d{6}$/.test(s)) {
-    return s[0] === "6" ? `${s}.SS` : `${s}.SZ`;
+    if (s[0] === "6") return `${s}.SS`;
+    if (s[0] === "0" || s[0] === "3") return `${s}.SZ`;
+    if (s[0] === "8" || s[0] === "4") return `${s}.BJ`;
+    return s;
   }
   return s;
 }
+
+/** Browser history cache TTL (prefer fresh Pages cache after this). */
+const LOCAL_HISTORY_TTL_MS = 12 * 60 * 60 * 1000;
+
+/** Label cutoffs — keep in sync with analysis.py BIAS_*_THRESHOLD */
+const BIAS_STRONG = 45;
+const BIAS_MILD = 18;
 
 function toStooqSymbol(normalized) {
   if (normalized.endsWith(".HK"))
@@ -115,11 +125,22 @@ function macd(series) {
   const line = series.map((_, i) =>
     e12[i] != null && e26[i] != null ? e12[i] - e26[i] : null,
   );
-  const signal = ema(
-    line.map((x) => x ?? 0),
-    9,
-  );
-  const hist = line.map((x, i) => (x != null ? x - signal[i] : null));
+  // Seed signal EMA only after MACD line is defined (do not coerce null → 0)
+  const signal = Array(series.length).fill(null);
+  const hist = Array(series.length).fill(null);
+  const k = 2 / (9 + 1);
+  let prev = null;
+  for (let i = 0; i < line.length; i += 1) {
+    if (line[i] == null) continue;
+    if (prev == null) {
+      prev = line[i];
+      signal[i] = prev;
+    } else {
+      prev = line[i] * k + prev * (1 - k);
+      signal[i] = prev;
+    }
+    hist[i] = line[i] - signal[i];
+  }
   return { line, signal, hist };
 }
 
@@ -140,39 +161,73 @@ function atr(rows, n = 14) {
 }
 
 function scoreBias(rows, closes, sma20, sma50, rsi14, macdHist) {
+  // Lite model: same label cutoffs as Streamlit full app (analysis.py).
+  // Weights are simplified (fewer signals) — not identical to full multi-factor score.
   const i = closes.length - 1;
   const close = closes[i];
   let score = 0;
 
-  if (close > sma20[i]) score += 18;
-  else score -= 18;
+  const sma5 = sma(closes, 5);
+  if (sma5[i] != null && sma20[i] != null && sma50[i] != null) {
+    if (sma5[i] > sma20[i] && sma20[i] > sma50[i] && close > sma20[i]) score += 22;
+    else if (sma5[i] < sma20[i] && sma20[i] < sma50[i] && close < sma20[i]) score -= 22;
+    else if (close > sma20[i]) score += 12;
+    else score -= 12;
+  } else if (sma20[i] != null) {
+    if (close > sma20[i]) score += 18;
+    else score -= 18;
+  }
 
-  if (sma20[i] > sma50[i]) score += 14;
-  else score -= 14;
+  if (sma20[i] != null && sma50[i] != null) {
+    if (sma20[i] > sma50[i]) score += 12;
+    else score -= 12;
+  }
 
-  if (macdHist[i] > 0) score += 16;
-  else score -= 16;
+  if (macdHist[i] != null) {
+    if (macdHist[i] > 0) score += 14;
+    else score -= 14;
+    if (i > 0 && macdHist[i - 1] != null) {
+      if (macdHist[i] > macdHist[i - 1] && macdHist[i] > 0) score += 6;
+      if (macdHist[i] < macdHist[i - 1] && macdHist[i] < 0) score -= 6;
+    }
+  }
 
-  if (rsi14[i] >= 50 && rsi14[i] <= 70) score += 10;
-  else if (rsi14[i] < 35) score -= 10;
+  if (rsi14[i] != null) {
+    if (rsi14[i] >= 55 && rsi14[i] < 70) score += 10;
+    else if (rsi14[i] >= 70) score -= 6;
+    else if (rsi14[i] <= 30) score += 6;
+    else if (rsi14[i] < 45) score -= 10;
+  }
 
   const mom5 = i >= 5 ? (close - closes[i - 5]) / closes[i - 5] : 0;
   if (mom5 > 0.02) score += 12;
   else if (mom5 < -0.02) score -= 12;
 
-  const window = closes.slice(Math.max(0, i - 20), i);
+  const window = closes.slice(Math.max(0, i - 20), i + 1);
   const hi20 = window.length ? Math.max(...window) : close;
   const lo20 = window.length ? Math.min(...window) : close;
-  if (close > hi20) score += 12;
-  if (close < lo20) score -= 12;
+  if (close >= hi20 * 0.998) score += 10;
+  if (close <= lo20 * 1.002) score -= 10;
+
+  // Volume confirmation when available
+  if (rows[i] && Number.isFinite(rows[i].volume) && i >= 5) {
+    const vols = rows.slice(i - 5, i).map((r) => r.volume || 0);
+    const avg = vols.reduce((a, b) => a + b, 0) / Math.max(vols.length, 1);
+    const chg = i > 0 ? close - closes[i - 1] : 0;
+    if (avg > 0 && rows[i].volume > avg * 1.3) {
+      if (chg > 0) score += 8;
+      else if (chg < 0) score -= 8;
+    }
+  }
 
   score = Math.max(-100, Math.min(100, Math.round(score)));
 
-  let bias = "Neutral";
-  if (score >= 45) bias = "Strong Bullish";
-  else if (score >= 18) bias = "Bullish";
-  else if (score <= -45) bias = "Strong Bearish";
-  else if (score <= -18) bias = "Bearish";
+  // Bilingual labels; cutoffs match analysis.py
+  let bias = "中性 / Neutral";
+  if (score >= BIAS_STRONG) bias = "强烈看多 / Strong Bullish";
+  else if (score >= BIAS_MILD) bias = "看多 / Bullish";
+  else if (score <= -BIAS_STRONG) bias = "强烈看空 / Strong Bearish";
+  else if (score <= -BIAS_MILD) bias = "看空 / Bearish";
 
   return { score, bias };
 }
@@ -324,6 +379,15 @@ function loadFromLocalStorage(symbol) {
     if (!raw) return null;
     const obj = JSON.parse(raw);
     if (!obj || !Array.isArray(obj.rows) || obj.rows.length < 20) return null;
+    const age = Date.now() - (Number(obj.updatedAt) || 0);
+    if (!Number.isFinite(age) || age > LOCAL_HISTORY_TTL_MS) {
+      try {
+        localStorage.removeItem(key);
+      } catch (_e) {
+        /* ignore */
+      }
+      return null;
+    }
     return obj.rows;
   } catch (_err) {
     return null;
@@ -363,17 +427,18 @@ async function loadMarketCache() {
 }
 
 async function loadLocalHistory(symbol) {
-  const cached = loadFromLocalStorage(symbol);
-  if (cached) {
-    return { rows: cached.slice(-260), source: "Local browser cache" };
-  }
-
+  // Prefer same-origin Pages cache first (fresher after Actions deploy)
   const market = await loadMarketCache();
   const quoteMap = market?.quotes || {};
   for (const a of aliasesFor(symbol)) {
     if (Array.isArray(quoteMap[a]) && quoteMap[a].length >= 20) {
       return { rows: quoteMap[a].slice(-260), source: "GitHub Pages cache" };
     }
+  }
+
+  const cached = loadFromLocalStorage(symbol);
+  if (cached) {
+    return { rows: cached.slice(-260), source: "Local browser cache" };
   }
   return null;
 }
