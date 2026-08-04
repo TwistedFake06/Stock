@@ -113,10 +113,88 @@ def render_options(symbol: str) -> None:
             hist_df=hist_opt if not hist_opt.empty else None,
         )
 
+    # Always resolve timing (fallback if report missing field / old cache)
+    timing = getattr(opt_rep, "timing", None)
+    if timing is None:
+        try:
+            from options_timing import assess_spread_timing
+
+            best_for_t = (
+                getattr(opt_rep, "best_playbook", None)
+                or getattr(opt_rep, "best", None)
+            )
+            timing = assess_spread_timing(
+                direction=getattr(opt_rep, "direction", None),
+                best=best_for_t,
+                after_hours=bool(getattr(opt_rep, "after_hours", False)),
+                dte=getattr(opt_rep, "dte", None),
+                iv_atm=getattr(opt_rep, "iv_atm", None),
+                ideas_count=len(getattr(opt_rep, "ideas", None) or []),
+                quote_warning=getattr(opt_rep, "quote_warning", "") or "",
+                pricing_note=getattr(opt_rep, "pricing_note", "") or "",
+            )
+        except Exception as _exc:
+            timing = None
+            st.caption(f"(适合度模块暂不可用: {_exc})")
+
+    def _render_timing_banner(t) -> None:
+        """Big, hard-to-miss block at top of results."""
+        st.markdown("---")
+        st.markdown("## 现在适合做 Spread 吗？")
+        if t is None:
+            st.warning("暂时无法评估适合度（分析未返回 timing）。")
+            return
+        box = st.container(border=True)
+        with box:
+            t1, t2, t3 = st.columns([1.2, 1, 2.2])
+            with t1:
+                if t.color == "green":
+                    st.success(f"### {t.verdict}")
+                elif t.color == "amber":
+                    st.warning(f"### {t.verdict}")
+                else:
+                    st.error(f"### {t.verdict}")
+            with t2:
+                st.metric("适合度评分", f"{t.score:.0f} / 100")
+            with t3:
+                st.markdown(f"**{t.headline}**")
+                st.markdown(f"👉 {t.action}")
+            if t.preferred_style:
+                st.info(f"风格建议：{t.preferred_style}")
+            for b in (t.bullets or [])[:8]:
+                st.markdown(f"- {b}")
+            with st.expander("适合度检查清单（明细）", expanded=True):
+                rows = []
+                for c in t.checklist or []:
+                    mark = {"pass": "PASS", "warn": "WARN", "fail": "FAIL"}.get(
+                        c.get("status", ""), "-"
+                    )
+                    rows.append(
+                        {
+                            "项": c.get("name", ""),
+                            "结果": mark,
+                            "说明": c.get("detail", ""),
+                        }
+                    )
+                if rows:
+                    st.dataframe(
+                        pd.DataFrame(rows),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                st.caption(
+                    "实盘辅助判断，不是下单指令。盘后请只做计划，开盘后再核价。"
+                )
+        st.markdown("---")
+
     if not opt_rep.eligible:
         st.error(opt_rep.message)
         st.write(", ".join(f"`{k}`" for k in sorted(INDEX_ETF_WHITELIST)))
+        _render_timing_banner(timing)
     else:
+        # Show timing FIRST so it is never missed
+        _render_timing_banner(timing)
+
         d = opt_rep.direction
         dir_pill = {
             "看多": "pill-red",
@@ -139,6 +217,7 @@ def render_options(symbol: str) -> None:
             st.caption(" · ".join(cap_bits))
 
         iv_txt = f"{opt_rep.iv_atm * 100:.0f}%" if opt_rep.iv_atm is not None else "—"
+
         st.markdown(
             f"""
             <div class="glass-card">

@@ -475,6 +475,24 @@ def analyze_options_spreads(
     if filtered_out > 0:
         msg += f" 已硬过滤剔除 {filtered_out} 个（流动性差或权利金/宽度不合规）。"
 
+    from options_timing import assess_spread_timing
+
+    timing = assess_spread_timing(
+        direction=direction,
+        best=best,
+        after_hours=after_hours,
+        dte=dte,
+        iv_atm=iv_atm,
+        ideas_count=len(ideas),
+        quote_warning=quote_warning,
+        pricing_note=pricing_note,
+    )
+    action_plan = list(action_plan)
+    action_plan.insert(
+        0,
+        f"0. 适合做 spread？→ {timing.verdict}（{timing.score:.0f}/100）· {timing.action}",
+    )
+
     return OptionsReport(
         symbol=sym,
         label=label,
@@ -501,4 +519,5 @@ def analyze_options_spreads(
         pricing_note=pricing_note,
         quote_warning=quote_warning,
         filtered_out=filtered_out,
+        timing=timing,
     )

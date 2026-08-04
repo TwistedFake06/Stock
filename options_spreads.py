@@ -74,6 +74,7 @@ from options_scoring import (
     estimate_vertical_win_rates,
     score_liquidity,
 )
+from options_timing import SpreadTimingReport, assess_spread_timing
 
 __all__ = [
     "INDEX_ETF_WHITELIST",
@@ -86,6 +87,8 @@ __all__ = [
     "options_symbol",
     "analyze_direction",
     "analyze_options_spreads",
+    "assess_spread_timing",
+    "SpreadTimingReport",
     "build_bull_put",
     "build_bear_call",
     "build_bull_call",

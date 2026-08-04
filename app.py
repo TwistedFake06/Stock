@@ -33,6 +33,7 @@ try:
     from views.entry_page import render_entry
     from views.extra_page import render_extra
     from views.options_page import render_options
+    from views.sop_page import render_sop
     from views.technical_page import render_technical
     from views.watchlist_page import render_watchlist
 except Exception as exc:
@@ -78,14 +79,14 @@ streamlit run app.py
     st.stop()
 
 st.set_page_config(
-    page_title="期权价差 · 股票分析",
+    page_title="投资SOP · 股票分析",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="collapsed",  # better for iPhone
     menu_items={
         "Get Help": None,
         "Report a bug": None,
-        "About": "期权价差首页 · 手机深色布局 · Streamlit Cloud",
+        "About": "投资SOP · 实盘辅助 · Streamlit Cloud",
     },
 )
 
@@ -100,12 +101,13 @@ if "symbol" not in st.session_state:
 
 # ---- sidebar ----
 with st.sidebar:
-    st.markdown("### 📊 期权 · 股票")
-    st.caption("首页 = 期权价差 · 点左上角打开菜单")
+    st.markdown("### 📊 投资 SOP")
+    st.caption("首页 = 投资SOP · 选股即给出场决策卡")
 
     page = st.selectbox(
         "功能页面",
         [
+            "投资SOP",
             "期权价差",
             "回测复盘",
             "行情看板",
@@ -151,7 +153,9 @@ with st.sidebar:
 symbol = st.session_state.symbol
 
 # ---- router (thin shell for Cloud + local) ----
-if page == "行情看板":
+if page == "投资SOP":
+    render_sop(symbol, period, interval, period_label, interval_label)
+elif page == "行情看板":
     render_dashboard(symbol, period, interval, period_label, interval_label)
 elif page == "多空分析":
     render_bias_page(symbol, period, interval, period_label, interval_label)

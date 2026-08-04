@@ -152,3 +152,5 @@ class OptionsReport:
     pricing_note: str = ""
     quote_warning: str = ""
     filtered_out: int = 0  # 硬过滤剔除数
+    # 是否适合现在做 spread（实盘辅助）
+    timing: Any | None = None
