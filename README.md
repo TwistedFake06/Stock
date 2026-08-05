@@ -167,20 +167,35 @@ py -m compileall -q .
 > 说明：Streamlit 为服务端 Python 运行模式，浏览器不直接请求第三方行情 API，
 > 因此不会像 GitHub Pages 静态版那样受前端 CORS 限制。
 
-1. 把本项目推到 **GitHub** 公开或私有仓库
+1. 把本项目推到 **GitHub** 公开或私有仓库（**不要**提交 `.env`）
 2. 打开 [share.streamlit.io](https://share.streamlit.io) 登录
 3. **New app** → 选仓库
 4. **Main file path** 填：`app.py`
 5. Python 版本建议 **3.11**
-6. Deploy 后用手机浏览器打开 `https://xxx.streamlit.app`
+6. （可选）App settings → **Secrets** 填免费 API key，例如：
+
+```toml
+ALPHAVANTAGE_API_KEY = "你的key"
+# FRED_API_KEY = "..."
+# FINNHUB_API_KEY = "..."
+```
+
+7. Deploy 后打开 `https://xxx.streamlit.app`
 
 可选：在 Cloud 的 Advanced settings 里确认 `requirements.txt` 被识别。
+
+**说明：**
+- 不设 Secrets 也能跑（yfinance 行情 + VIX/SPY 等）。
+- Alpha Vantage / FRED / Finnhub 仅在 Secrets 或本地 `.env` 有 key 时启用。
+- Cloud **读不到** 你电脑上的 `.env`，必须在网页 Secrets 里再贴一次 key。
+- 免费 Alpha Vantage 额度很紧；Cloud 多用户刷新会更快耗尽，请依赖缓存、少扫大量股票。
 
 ### 常见问题（Streamlit Cloud）
 
 - 启动失败（ImportError）：确认 `requirements.txt` 已包含依赖并重新 Deploy。
 - 拉取行情失败：通常为 Yahoo 临时网络/频率限制，稍后重试。
 - 页面空白或异常：在 Cloud 的 App logs 查看报错栈并按行修复。
+- Secrets 无效：键名必须完全一致，例如 `ALPHAVANTAGE_API_KEY`（TOML 字符串加引号）。
 
 > 期权/行情依赖 Yahoo Finance，Cloud 服务器网络需能访问 Yahoo；若拉取失败请稍后重试。
 

@@ -25,6 +25,15 @@ from extra_analysis import (
     build_scorecard,
     default_benchmark,
 )
+from free_data import (
+    analyze_liquidity,
+    extract_quality_extras,
+    free_data_status,
+    get_market_regime,
+    get_news_pulse,
+    merge_av_overview_into_info,
+    multi_horizon_rs,
+)
 from indicators import enrich
 from stock_service import (
     cached_calendar,
@@ -81,6 +90,20 @@ class TradeSOP:
     summary: str = ""
     period: str = "1y"
     notes: list[str] = field(default_factory=list)
+
+    # Real-invest extras
+    expectancy_r: float | None = None  # expected R per trade from path WR + R:R
+    regime_label: str = "—"
+    regime_score: float | None = None
+    regime_summary: str = ""
+    regime_bullets: list[str] = field(default_factory=list)
+    liquidity_label: str = "—"
+    liquidity_score: float | None = None
+    multi_rs_summary: str = ""
+    quality_notes: list[str] = field(default_factory=list)
+    news_summary: str = ""
+    data_sources: list[str] = field(default_factory=list)
+    scorecard_bullets: list[str] = field(default_factory=list)
 
 
 def _path_win_rate(
@@ -167,6 +190,14 @@ def _stability_score(risk, trend, bias_score: float) -> tuple[float, str]:
     return round(score, 1), label
 
 
+def _expectancy_r(win_rate_pct: float | None, rr: float | None) -> float | None:
+    """E[R] = p*R - (1-p)*1  assuming 1R risk, R:R = reward/risk."""
+    if win_rate_pct is None or rr is None or rr <= 0:
+        return None
+    p = float(win_rate_pct) / 100.0
+    return round(p * float(rr) - (1.0 - p) * 1.0, 3)
+
+
 def _enter_decision(
     entry_opp: str,
     entry_score: float,
@@ -176,11 +207,18 @@ def _enter_decision(
     win_rate: float | None,
     rr: float | None,
     risk_level: str,
+    *,
+    regime_score: float | None = None,
+    liquidity_score: float | None = None,
+    expectancy_r: float | None = None,
+    earnings_soon: bool = False,
+    chase_high: bool = False,
+    multi_rs_score: float | None = None,
 ) -> tuple[str, float, str]:
     """Map models → 适合入场 / 谨慎试仓 / 观望 / 回避 + score."""
-    s = 40.0 + entry_score * 0.35
+    s = 38.0 + entry_score * 0.32
     if entry_opp in ("较佳入场",):
-        s += 18
+        s += 16
     elif entry_opp in ("可关注",):
         s += 8
     elif entry_opp in ("观望",):
@@ -197,9 +235,9 @@ def _enter_decision(
     if "强烈看空" in bias_label:
         s -= 20
 
-    s += (stability - 50) * 0.15
+    s += (stability - 50) * 0.12
     if win_rate is not None:
-        s += (win_rate - 50) * 0.2
+        s += (win_rate - 50) * 0.18
     if rr is not None:
         if rr >= 2.0:
             s += 8
@@ -211,12 +249,57 @@ def _enter_decision(
     if risk_level in ("高", "极高"):
         s -= 8
 
+    # Market regime (VIX / SPY structure) — real gate for new risk
+    if regime_score is not None:
+        s += (float(regime_score) - 50.0) * 0.22
+        if regime_score < 35:
+            s -= 8
+    if liquidity_score is not None:
+        s += (float(liquidity_score) - 50.0) * 0.10
+        if liquidity_score < 35:
+            s -= 10
+    if multi_rs_score is not None:
+        s += (float(multi_rs_score) - 50.0) * 0.08
+    if expectancy_r is not None:
+        if expectancy_r >= 0.35:
+            s += 8
+        elif expectancy_r >= 0.10:
+            s += 3
+        elif expectancy_r < 0:
+            s -= 12
+    if earnings_soon:
+        s -= 14
+    if chase_high:
+        s -= 8
+
     s = float(max(0.0, min(100.0, s)))
 
     # Hard gates for long SOP
     if entry_opp in ("偏空回避",) or ("强烈看空" in bias_label and entry_score < 50):
         return "回避", min(s, 35.0), "偏空"
-    if s >= 72 and entry_opp in ("较佳入场", "可关注") and bias_score >= -10:
+    if liquidity_score is not None and liquidity_score < 28:
+        return "观望", min(s, 48.0), "观望"
+    if earnings_soon:
+        # Within earnings window: never full "适合入场" (gap risk)
+        if s >= 55:
+            return "谨慎试仓", min(s, 68.0), "做多"
+        if s >= 40:
+            return "观望", min(s, 52.0), "观望"
+        return "回避", min(s, 40.0), "观望"
+    if regime_score is not None and regime_score < 32:
+        if s >= 70 and entry_opp in ("较佳入场",):
+            return "谨慎试仓", min(s, 65.0), "做多"
+        if s >= 50:
+            return "观望", min(s, 55.0), "观望"
+        return "回避", min(s, 40.0), "观望" if bias_score >= -15 else "偏空"
+
+    if (
+        s >= 74
+        and entry_opp in ("较佳入场", "可关注")
+        and bias_score >= -10
+        and (expectancy_r is None or expectancy_r >= 0.05)
+        and (regime_score is None or regime_score >= 42)
+    ):
         return "适合入场", s, "做多"
     if s >= 55 and entry_opp not in ("偏空回避", "不宜追高"):
         return "谨慎试仓", s, "做多"
@@ -274,15 +357,48 @@ def build_trade_sop(
     last = float(df["Close"].iloc[-1])
     bias = analyze_bias(df)
     entry = analyze_entry(df)
-    targets = analyze_targets(df, info=info or {}, entry=entry)
     risk = analyze_risk(df)
     trend = analyze_trend(df)
-    funda = analyze_fundamentals(info or {})
     vol = analyze_volume(df)
     sr = analyze_support_resistance(df)
     rets = compute_returns(df)
 
+    # Free market regime + optional Alpha Vantage (funda fill + news sentiment)
+    try:
+        regime = get_market_regime()
+    except Exception:
+        regime = None
+
+    info_use = dict(info or {})
+    av_filled: list[str] = []
+    try:
+        info_use, av_filled = merge_av_overview_into_info(info_use, sym)
+    except Exception:
+        av_filled = []
+
+    targets = analyze_targets(df, info=info_use, entry=entry)
+    funda = analyze_fundamentals(info_use)
+    liq = analyze_liquidity(df, info_use)
+    quality = extract_quality_extras(info_use, last_price=last)
+    if av_filled:
+        quality.notes.append(
+            f"Alpha Vantage 补全 {len(av_filled)} 项基本面字段（仅填 yfinance 缺失）"
+        )
+    try:
+        news = get_news_pulse(sym)
+    except Exception:
+        news = None
+
+    # Soft note from news sentiment (Alpha Vantage)
+    if news and getattr(news, "available", False) and news.sentiment_score is not None:
+        sc = float(news.sentiment_score)
+        if sc <= -0.20:
+            quality.notes.append(f"新闻情绪偏空（AV {sc:+.2f}）：消息面逆风，宜减仓/观望")
+        elif sc >= 0.25:
+            quality.notes.append(f"新闻情绪偏多（AV {sc:+.2f}）：注意是否已定价/追高")
+
     bench_sym, bench_label = default_benchmark(sym)
+    bench = None
     try:
         bench = fetch_history(bench_sym, period=period, interval=interval)
         rs = analyze_relative_strength(
@@ -290,13 +406,39 @@ def build_trade_sop(
         )
     except Exception:
         rs = None
-    card = build_scorecard(bias.score, funda, risk, rs)
+    multi_rs = multi_horizon_rs(hist, bench) if bench is not None else {
+        "score": None,
+        "summary": "",
+        "label": "—",
+    }
+    card = build_scorecard(
+        bias.score,
+        funda,
+        risk,
+        rs,
+        regime_score=getattr(regime, "score", None) if regime else None,
+        liquidity_score=liq.score,
+        multi_rs_score=multi_rs.get("score"),
+    )
 
     try:
         cal = cached_calendar(sym, cache_bucket(30))
-        events = analyze_events(info or {}, cal)
+        events = analyze_events(info_use, cal)
     except Exception:
         events = None
+
+    earnings_soon = bool(getattr(events, "near_earnings", False)) if events else False
+    if events is not None and not earnings_soon:
+        for it in getattr(events, "items", []) or []:
+            if getattr(it, "name", "") == "财报日":
+                dleft = getattr(it, "days_left", None)
+                if dleft is not None and 0 <= int(dleft) <= 7:
+                    earnings_soon = True
+                    break
+
+    chase_high = bool(
+        quality.fifty_two_week_pct is not None and quality.fifty_two_week_pct >= 92
+    )
 
     e_low = entry.suggested_entry_low
     e_high = entry.suggested_entry_high
@@ -330,10 +472,10 @@ def build_trade_sop(
     if risk_ps and reward_ps:
         path_wr = _path_win_rate(df["Close"], risk_ps, reward_ps)
 
-    # Blend path WR with daily up-win rate
+    # Blend path WR with daily up-win rate (path more relevant for stops/targets)
     day_wr = getattr(risk, "win_rate_pct", None)
     if path_wr is not None and day_wr is not None:
-        win_rate = 0.65 * path_wr + 0.35 * float(day_wr)
+        win_rate = 0.70 * path_wr + 0.30 * float(day_wr)
     elif path_wr is not None:
         win_rate = path_wr
     elif day_wr is not None:
@@ -351,6 +493,8 @@ def build_trade_sop(
     else:
         wr_label = "—"
 
+    exp_r = _expectancy_r(win_rate, rr)
+
     stab, stab_label = _stability_score(risk, trend, bias.score)
     enter_ok, enter_score, side = _enter_decision(
         entry.opportunity,
@@ -361,6 +505,12 @@ def build_trade_sop(
         win_rate,
         rr,
         getattr(risk, "risk_level", "—") or "—",
+        regime_score=getattr(regime, "score", None) if regime else None,
+        liquidity_score=liq.score,
+        expectancy_r=exp_r,
+        earnings_soon=earnings_soon,
+        chase_high=chase_high,
+        multi_rs_score=multi_rs.get("score"),
     )
 
     # Position
@@ -382,7 +532,10 @@ def build_trade_sop(
     elif pos.shares <= 0:
         pos_note = "；".join(pos.notes) if pos.notes else "风险预算不足 1 股"
     else:
-        pos_note = f"约 {pos.shares} 股 · 仓位市值 ${pos.position_value:,.0f} · 占本金 {pos.position_pct_of_capital:.1f}%"
+        pos_note = (
+            f"约 {pos.shares} 股 · 仓位市值 ${pos.position_value:,.0f} "
+            f"· 占本金 {pos.position_pct_of_capital:.1f}%（本金按 HKD→USD 折算）"
+        )
 
     # Checklist
     checklist: list[dict[str, str]] = []
@@ -435,8 +588,50 @@ def build_trade_sop(
         checklist.append(
             {
                 "name": "事件风险",
-                "status": "warn",
+                "status": "fail" if earnings_soon else "warn",
                 "detail": str(events.caution),
+            }
+        )
+    if regime is not None:
+        rstat = (
+            "pass"
+            if regime.score >= 60
+            else ("warn" if regime.score >= 40 else "fail")
+        )
+        checklist.append(
+            {
+                "name": "市场环境",
+                "status": rstat,
+                "detail": f"{regime.label}（{regime.score:.0f}）· VIX {regime.vix_label}"
+                + (f" {regime.vix:.1f}" if regime.vix is not None else "")
+                + f" · SPY {regime.spy_trend}",
+            }
+        )
+    checklist.append(
+        {
+            "name": "流动性",
+            "status": "pass"
+            if liq.score >= 65
+            else ("warn" if liq.score >= 40 else "fail"),
+            "detail": liq.summary.replace("**", ""),
+        }
+    )
+    if exp_r is not None:
+        checklist.append(
+            {
+                "name": "期望值 E[R]",
+                "status": "pass" if exp_r >= 0.15 else ("warn" if exp_r >= 0 else "fail"),
+                "detail": f"约 {exp_r:+.2f}R / 笔（用胜率×盈亏比估算，含1R亏损假设）",
+            }
+        )
+    if multi_rs.get("score") is not None:
+        checklist.append(
+            {
+                "name": "多周期强弱",
+                "status": "pass"
+                if multi_rs["score"] >= 58
+                else ("warn" if multi_rs["score"] >= 42 else "fail"),
+                "detail": multi_rs.get("summary", ""),
             }
         )
 
@@ -461,16 +656,25 @@ def build_trade_sop(
             actions_now.append(f"T2 目标 {t2:.2f}（趋势持有）")
         actions_now.append("成交后写交易日志：理由 / 止损 / 目标")
     elif enter_ok == "谨慎试仓":
-        actions_now.append("最多半仓或 0.5R（不是满 1R）")
+        half = max(1, pos.shares // 2) if pos.shares > 0 else 0
+        actions_now.append(
+            f"最多 0.5R（约 {half} 股）" if half else "最多半仓或 0.5R（不是满 1R）"
+        )
         if e_low and e_high:
             actions_now.append(f"只在 {e_low:.2f}–{e_high:.2f} 回踩挂限价，不追高")
         actions_now.append(f"止损 {stop:.2f} 必须预设" if stop else "先定止损再考虑")
+        if earnings_soon:
+            actions_now.append("临近财报：减小仓位或等财报后再做")
+        if regime is not None and regime.score < 45:
+            actions_now.append("大盘环境偏弱：优先高流动性标的 + 更紧风控")
         actions_wait.append("若跌破止损或机会评级变「回避」→ 立刻停手")
         actions_wait.append("等方向更清晰或稳定度回升再加仓")
     elif enter_ok == "观望":
         actions_now.append("今天不开新仓")
         if e_low:
             actions_wait.append(f"价格进入 {e_low:.2f}–{e_high:.2f} 且多空转正再评估")
+        if regime is not None and regime.score < 40:
+            actions_wait.append("等待 VIX 回落或 SPY 重回均线上方再开多")
         actions_wait.append("继续观察量价 / 均线结构，不预判抄底")
     else:
         actions_now.append("回避做多；不加仓")
@@ -479,32 +683,54 @@ def build_trade_sop(
 
     if vol and getattr(vol, "trend", "") == "放量" and bias.score < 0:
         actions_wait.append("放量偏空：避免在恐慌杀跌中接刀")
+    if chase_high:
+        actions_wait.append("靠近 52 周高位：等回踩入场区，避免 FOMO 追高")
+    if liq.score < 40:
+        actions_now.append("流动性偏弱：减小单笔、用限价、避免市价扫单")
 
     invalidation = entry.invalidation or (
         f"收盘跌破止损 {stop:.2f} 则本计划作废" if stop else "结构破坏则作废"
     )
 
+    reg_bit = ""
+    if regime is not None:
+        reg_bit = f"市场 {regime.label}（{regime.score:.0f}）；"
+    exp_bit = f"期望 {exp_r:+.2f}R；" if exp_r is not None else ""
     if win_rate is not None:
         summary = (
             f"{sym} 现价 {last:.2f} → **{enter_ok}**（{enter_score:.0f}分）。"
-            f"方向 {bias.bias}；入场 {entry.opportunity}；"
-            f"路径胜率约 {win_rate:.0f}%（{wr_label}）；稳定度 {stab_label}。"
+            f"{reg_bit}方向 {bias.bias}；入场 {entry.opportunity}；"
+            f"路径胜率约 {win_rate:.0f}%（{wr_label}）；{exp_bit}稳定度 {stab_label}。"
         )
     else:
         summary = (
             f"{sym} 现价 {last:.2f} → **{enter_ok}**（{enter_score:.0f}分）。"
-            f"方向 {bias.bias}；入场 {entry.opportunity}；稳定度 {stab_label}。"
+            f"{reg_bit}方向 {bias.bias}；入场 {entry.opportunity}；稳定度 {stab_label}。"
         )
 
     notes = [
         "胜率=历史路径模拟（先触 T1 再触止损），非未来保证",
+        "期望值 E[R]=胜率×盈亏比 − (1−胜率)×1R，用于比较「值不值得做」",
         "稳定度综合波动、回撤、夏普、趋势强度",
+        "综合分权重：技术22/基本面22/风险18/多周期RS15/市场环境13/流动性10",
         f"区间报酬 {rets.get('total_return_pct'):.1f}%，年化波动 {rets.get('volatility_pct'):.1f}%"
         if rets.get("total_return_pct") is not None and rets.get("volatility_pct") is not None
         else "数据仅供实盘辅助",
     ]
     if sr.nearest_support:
         notes.append(f"近支撑 ≈ {sr.nearest_support:.2f} · 近阻力 ≈ {sr.nearest_resistance}")
+    notes.extend(quality.notes[:4])
+
+    status = free_data_status()
+    data_sources = list(getattr(regime, "sources", None) or ["yfinance"])
+    if status.get("fred"):
+        data_sources.append("FRED")
+    if status.get("alphavantage") and (av_filled or (news and getattr(news, "source", "") == "AlphaVantage")):
+        data_sources.append("AlphaVantage")
+    if status.get("finnhub") and news and getattr(news, "source", "") == "Finnhub":
+        data_sources.append("Finnhub")
+    elif status.get("finnhub") and news and getattr(news, "available", False) and "AlphaVantage" not in data_sources:
+        data_sources.append("Finnhub")
 
     return TradeSOP(
         symbol=sym,
@@ -542,4 +768,16 @@ def build_trade_sop(
         summary=summary,
         period=period,
         notes=notes,
+        expectancy_r=exp_r,
+        regime_label=getattr(regime, "label", "—") if regime else "—",
+        regime_score=getattr(regime, "score", None) if regime else None,
+        regime_summary=getattr(regime, "summary", "") if regime else "",
+        regime_bullets=list(getattr(regime, "bullets", []) or []) if regime else [],
+        liquidity_label=liq.label,
+        liquidity_score=liq.score,
+        multi_rs_summary=str(multi_rs.get("summary") or ""),
+        quality_notes=list(quality.notes or []),
+        news_summary=getattr(news, "summary", "") if news else "",
+        data_sources=data_sources,
+        scorecard_bullets=list(card.bullets or []),
     )

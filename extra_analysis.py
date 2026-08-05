@@ -452,21 +452,35 @@ class FundaReport:
 
 
 def analyze_fundamentals(info: dict[str, Any]) -> FundaReport:
+    """
+    Fundamentals score for real equity selection.
+
+    Weighted buckets (not raw equal-mean of every field):
+      quality 35% · growth 25% · valuation 25% · balance sheet 10% · soft (analyst) 5%
+    Analyst ratings are intentionally down-weighted (lagging / crowded).
+    """
     if not info:
         return FundaReport(summary="无基本面数据。")
 
     items: list[FundaItem] = []
-    scores: list[float] = []
+    # category -> list of scores
+    buckets: dict[str, list[float]] = {
+        "quality": [],
+        "growth": [],
+        "valuation": [],
+        "balance": [],
+        "soft": [],
+    }
 
-    def add(name, raw, display, verdict, note, sc: float | None = None):
+    def add(name, raw, display, verdict, note, sc: float | None = None, bucket: str = "soft"):
         items.append(FundaItem(name, raw, display, verdict, note))
-        if sc is not None:
-            scores.append(sc)
+        if sc is not None and bucket in buckets:
+            buckets[bucket].append(float(sc))
 
     pe = _f(info.get("trailingPE") or info.get("forwardPE"))
     if pe is not None:
         if 0 < pe < 15:
-            v, sc, note = "偏多", 80, "估值偏低（相对常见区间）"
+            v, sc, note = "偏多", 80, "估值偏低（相对常见区间；成长股需对照 PEG）"
         elif pe < 25:
             v, sc, note = "中性", 60, "估值适中"
         elif pe < 40:
@@ -475,17 +489,17 @@ def analyze_fundamentals(info: dict[str, Any]) -> FundaReport:
             v, sc, note = "偏空", 25, "估值较高，需成长匹配"
         if pe <= 0:
             v, sc, note = "中性", 45, "PE 异常/亏损"
-        add("市盈率 PE", pe, f"{pe:.2f}", v, note, sc)
+        add("市盈率 PE", pe, f"{pe:.2f}", v, note, sc, "valuation")
 
     pb = _f(info.get("priceToBook"))
     if pb is not None:
         if 0 < pb < 1.5:
-            v, sc, note = "偏多", 75, "市净率较低"
+            v, sc, note = "偏多", 75, "市净率较低（价值型友好）"
         elif pb < 4:
             v, sc, note = "中性", 55, "市净率正常"
         else:
-            v, sc, note = "偏空", 35, "市净率偏高"
-        add("市净率 PB", pb, f"{pb:.2f}", v, note, sc)
+            v, sc, note = "偏空", 35, "市净率偏高（轻资产/成长常见）"
+        add("市净率 PB", pb, f"{pb:.2f}", v, note, sc, "valuation")
 
     ps = _f(info.get("priceToSalesTrailing12Months"))
     if ps is not None:
@@ -495,120 +509,171 @@ def analyze_fundamentals(info: dict[str, Any]) -> FundaReport:
             v, sc, note = "中性", 55, "市销率适中"
         else:
             v, sc, note = "偏空", 35, "市销率偏高"
-        add("市销率 PS", ps, f"{ps:.2f}", v, note, sc)
+        add("市销率 PS", ps, f"{ps:.2f}", v, note, sc, "valuation")
 
     peg = _f(info.get("pegRatio"))
     if peg is not None and peg > 0:
         if peg < 1:
-            v, sc, note = "偏多", 80, "PEG<1，成长相对便宜"
-        elif peg < 2:
-            v, sc, note = "中性", 55, "PEG 尚可"
+            v, sc, note = "偏多", 82, "PEG<1：成长相对便宜（实盘更看这个）"
+        elif peg < 1.5:
+            v, sc, note = "中性", 60, "PEG 尚可"
+        elif peg < 2.5:
+            v, sc, note = "中性", 48, "PEG 偏贵但仍可接受"
         else:
-            v, sc, note = "偏空", 35, "PEG 偏高"
-        add("PEG", peg, f"{peg:.2f}", v, note, sc)
+            v, sc, note = "偏空", 32, "PEG 偏高：成长定价已贵"
+        add("PEG", peg, f"{peg:.2f}", v, note, sc, "valuation")
 
+    # --- Quality ---
     roe = _f(info.get("returnOnEquity"))
     if roe is not None:
         roe_pct = roe * 100 if abs(roe) <= 1.5 else roe
-        if roe_pct >= 15:
-            v, sc, note = "偏多", 85, "盈利能力强"
+        if roe_pct >= 20:
+            v, sc, note = "偏多", 88, "ROE 优秀（护城河/资本效率）"
+        elif roe_pct >= 12:
+            v, sc, note = "偏多", 72, "ROE 良好"
         elif roe_pct >= 8:
-            v, sc, note = "中性", 60, "盈利能力一般"
+            v, sc, note = "中性", 55, "ROE 一般"
         else:
-            v, sc, note = "偏空", 35, "盈利能力偏弱"
-        add("ROE", roe_pct, f"{roe_pct:.1f}%", v, note, sc)
+            v, sc, note = "偏空", 32, "ROE 偏弱"
+        add("ROE", roe_pct, f"{roe_pct:.1f}%", v, note, sc, "quality")
 
     pm = _f(info.get("profitMargins"))
     if pm is not None:
         pm_pct = pm * 100 if abs(pm) <= 1.5 else pm
-        if pm_pct >= 15:
-            v, sc, note = "偏多", 80, "净利率优秀"
+        if pm_pct >= 20:
+            v, sc, note = "偏多", 85, "净利率优秀"
+        elif pm_pct >= 10:
+            v, sc, note = "偏多", 72, "净利率良好"
         elif pm_pct >= 5:
             v, sc, note = "中性", 55, "净利率尚可"
         else:
-            v, sc, note = "偏空", 35, "净利率偏低"
-        add("净利率", pm_pct, f"{pm_pct:.1f}%", v, note, sc)
+            v, sc, note = "偏空", 32, "净利率偏低"
+        add("净利率", pm_pct, f"{pm_pct:.1f}%", v, note, sc, "quality")
 
+    opm = _f(info.get("operatingMargins"))
+    if opm is not None:
+        opm_pct = opm * 100 if abs(opm) <= 1.5 else opm
+        if opm_pct >= 20:
+            v, sc, note = "偏多", 85, "营业利润率强（主业赚钱能力）"
+        elif opm_pct >= 10:
+            v, sc, note = "中性", 62, "营业利润率正常"
+        elif opm_pct >= 0:
+            v, sc, note = "中性", 48, "营业利润率偏低"
+        else:
+            v, sc, note = "偏空", 28, "营业利润率为负"
+        add("营业利润率", opm_pct, f"{opm_pct:.1f}%", v, note, sc, "quality")
+
+    # FCF yield = freeCashflow / marketCap
+    fcf = _f(info.get("freeCashflow"))
+    mcap = _f(info.get("marketCap"))
+    if fcf is not None and mcap and mcap > 0:
+        fcf_y = fcf / mcap * 100
+        if fcf_y >= 6:
+            v, sc, note = "偏多", 88, "FCF 收益率高：现金流回报扎实"
+        elif fcf_y >= 3:
+            v, sc, note = "偏多", 70, "FCF 收益率良好"
+        elif fcf_y >= 0:
+            v, sc, note = "中性", 52, "FCF 为正但收益率一般"
+        else:
+            v, sc, note = "偏空", 30, "自由现金流为负（扩张/亏损）"
+        add("FCF收益率", fcf_y, f"{fcf_y:.1f}%", v, note, sc, "quality")
+
+    # --- Growth ---
     rg = _f(info.get("revenueGrowth"))
     if rg is not None:
         rg_pct = rg * 100 if abs(rg) <= 2 else rg
-        if rg_pct >= 15:
-            v, sc, note = "偏多", 85, "营收高增长"
+        if rg_pct >= 20:
+            v, sc, note = "偏多", 88, "营收高增长"
+        elif rg_pct >= 8:
+            v, sc, note = "偏多", 72, "营收稳健增长"
         elif rg_pct >= 0:
-            v, sc, note = "中性", 55, "营收正增长"
+            v, sc, note = "中性", 52, "营收微增"
         else:
-            v, sc, note = "偏空", 30, "营收下滑"
-        add("营收增长", rg_pct, f"{rg_pct:+.1f}%", v, note, sc)
+            v, sc, note = "偏空", 28, "营收下滑"
+        add("营收增长", rg_pct, f"{rg_pct:+.1f}%", v, note, sc, "growth")
 
     eg = _f(info.get("earningsGrowth") or info.get("earningsQuarterlyGrowth"))
     if eg is not None:
         eg_pct = eg * 100 if abs(eg) <= 2 else eg
-        if eg_pct >= 15:
-            v, sc, note = "偏多", 85, "盈利高增长"
+        if eg_pct >= 20:
+            v, sc, note = "偏多", 88, "盈利高增长"
+        elif eg_pct >= 8:
+            v, sc, note = "偏多", 70, "盈利稳健增长"
         elif eg_pct >= 0:
-            v, sc, note = "中性", 55, "盈利正增长"
+            v, sc, note = "中性", 52, "盈利微增"
         else:
-            v, sc, note = "偏空", 30, "盈利下滑"
-        add("盈利增长", eg_pct, f"{eg_pct:+.1f}%", v, note, sc)
+            v, sc, note = "偏空", 28, "盈利下滑"
+        add("盈利增长", eg_pct, f"{eg_pct:+.1f}%", v, note, sc, "growth")
 
+    # --- Balance sheet ---
     de = _f(info.get("debtToEquity"))
     if de is not None:
-        # yfinance often gives percent-like 50 = 0.5
         de_v = de / 100 if de > 10 else de
         if de_v < 0.5:
-            v, sc, note = "偏多", 75, "负债率较低"
-        elif de_v < 1.5:
-            v, sc, note = "中性", 55, "负债可控"
+            v, sc, note = "偏多", 78, "负债率较低"
+        elif de_v < 1.2:
+            v, sc, note = "中性", 58, "负债可控"
+        elif de_v < 2.0:
+            v, sc, note = "中性", 42, "负债偏高，利率环境敏感"
         else:
-            v, sc, note = "偏空", 35, "负债偏高"
-        add("资产负债(D/E)", de, f"{de:.2f}", v, note, sc)
+            v, sc, note = "偏空", 28, "高杠杆：下行风险放大"
+        add("资产负债(D/E)", de, f"{de:.2f}", v, note, sc, "balance")
+
+    cr = _f(info.get("currentRatio"))
+    if cr is not None:
+        if cr >= 1.5:
+            v, sc, note = "偏多", 75, "流动比率健康"
+        elif cr >= 1.0:
+            v, sc, note = "中性", 55, "流动比率尚可"
+        else:
+            v, sc, note = "偏空", 30, "流动比率 <1：短期偿债压力"
+        add("流动比率", cr, f"{cr:.2f}", v, note, sc, "balance")
 
     dy = _f(info.get("dividendYield"))
     if dy is not None:
         dy_pct = dy * 100 if dy < 1 else dy
-        if dy_pct >= 2:
-            v, sc, note = "偏多", 70, "股息率有吸引力"
+        if dy_pct >= 2.5:
+            v, sc, note = "偏多", 68, "股息有贡献（非成长主逻辑）"
         elif dy_pct > 0:
-            v, sc, note = "中性", 55, "有分红"
+            v, sc, note = "中性", 52, "有少量分红"
         else:
             v, sc, note = "中性", 50, "几乎无股息"
-        add("股息率", dy_pct, f"{dy_pct:.2f}%", v, note, sc)
+        add("股息率", dy_pct, f"{dy_pct:.2f}%", v, note, sc, "soft")
 
-    # Soft factors
+    # Soft factors (low weight)
     target = _f(info.get("targetMeanPrice"))
     price = _f(info.get("currentPrice") or info.get("regularMarketPrice") or info.get("last_price"))
     if target and price and price > 0:
         upside = (target / price - 1) * 100
         if upside >= 15:
-            v, sc, note = "偏多", 75, f"分析师目标价隐含 {upside:+.1f}%"
+            v, sc, note = "偏多", 70, f"分析师目标价隐含 {upside:+.1f}%（滞后参考）"
         elif upside >= 0:
-            v, sc, note = "中性", 55, f"目标价隐含 {upside:+.1f}%"
+            v, sc, note = "中性", 52, f"目标价隐含 {upside:+.1f}%"
         else:
             v, sc, note = "偏空", 35, f"目标价隐含 {upside:+.1f}%"
-        add("目标价空间", upside, f"{upside:+.1f}%", v, note, sc)
+        add("目标价空间", upside, f"{upside:+.1f}%", v, note, sc, "soft")
 
     rec = info.get("recommendationKey") or info.get("recommendationMean")
     if rec is not None:
         if isinstance(rec, str):
             mapping = {
-                "strong_buy": ("偏多", 90, "评级 strong_buy"),
-                "buy": ("偏多", 75, "评级 buy"),
+                "strong_buy": ("偏多", 78, "评级 strong_buy（拥挤度风险）"),
+                "buy": ("偏多", 65, "评级 buy"),
                 "hold": ("中性", 50, "评级 hold"),
-                "underperform": ("偏空", 30, "评级 underperform"),
-                "sell": ("偏空", 20, "评级 sell"),
+                "underperform": ("偏空", 32, "评级 underperform"),
+                "sell": ("偏空", 22, "评级 sell"),
             }
             v, sc, note = mapping.get(rec.lower(), ("中性", 50, f"评级 {rec}"))
-            add("分析师评级", rec, str(rec), v, note, sc)
+            add("分析师评级", rec, str(rec), v, note, sc, "soft")
         else:
-            # 1=strong buy ... 5=sell
             mean = float(rec)
             if mean <= 2.0:
-                v, sc, note = "偏多", 80, f"评级均值 {mean:.2f}（越低越好）"
+                v, sc, note = "偏多", 70, f"评级均值 {mean:.2f}（越低越好）"
             elif mean <= 3.0:
-                v, sc, note = "中性", 55, f"评级均值 {mean:.2f}"
+                v, sc, note = "中性", 52, f"评级均值 {mean:.2f}"
             else:
                 v, sc, note = "偏空", 30, f"评级均值 {mean:.2f}"
-            add("分析师评级", mean, f"{mean:.2f}", v, note, sc)
+            add("分析师评级", mean, f"{mean:.2f}", v, note, sc, "soft")
 
     if not items:
         return FundaReport(
@@ -616,14 +681,30 @@ def analyze_fundamentals(info: dict[str, Any]) -> FundaReport:
             available=False,
         )
 
-    score = float(np.mean(scores)) if scores else None
+    weights = {
+        "quality": 0.35,
+        "growth": 0.25,
+        "valuation": 0.25,
+        "balance": 0.10,
+        "soft": 0.05,
+    }
+    w_sum = 0.0
+    acc = 0.0
+    for k, w in weights.items():
+        arr = buckets.get(k) or []
+        if not arr:
+            continue
+        acc += w * float(np.mean(arr))
+        w_sum += w
+    score = float(acc / w_sum) if w_sum > 0 else None
     grade = _grade(score)
     bull = sum(1 for i in items if i.verdict == "偏多")
     bear = sum(1 for i in items if i.verdict == "偏空")
     summary = (
         f"基本面综合 **{grade}**"
         + (f"（{score:.0f}分）" if score is not None else "")
-        + f"；偏多 {bull} 项 / 偏空 {bear} 项。"
+        + f"；偏多 {bull} 项 / 偏空 {bear} 项"
+        + " · 权重：质量35/成长25/估值25/负债10/软指标5。"
     )
     return FundaReport(score=score, grade=grade, items=items, summary=summary, available=True)
 
@@ -810,11 +891,14 @@ class Scorecard:
     funda_score: float | None = None
     risk_score: float | None = None  # higher = safer / better risk-adjusted
     rs_score: float | None = None
+    regime_score: float | None = None
+    liquidity_score: float | None = None
     total_score: float | None = None
     total_grade: str = "—"
     stance: str = "—"  # 综合偏多 | 中性 | 偏空
     bullets: list[str] = field(default_factory=list)
     summary: str = ""
+    weights_used: dict[str, float] = field(default_factory=dict)
 
 
 def build_scorecard(
@@ -822,7 +906,16 @@ def build_scorecard(
     funda: FundaReport | None,
     risk: RiskReport | None,
     rs: RSReport | None,
+    *,
+    regime_score: float | None = None,
+    liquidity_score: float | None = None,
+    multi_rs_score: float | None = None,
 ) -> Scorecard:
+    """
+    Real-invest weighted scorecard (renormalize over available parts):
+
+      technical 22 · funda 22 · risk 18 · multi-RS 15 · market regime 13 · liquidity 10
+    """
     tech = None
     if bias_score is not None:
         tech = max(0.0, min(100.0, (bias_score + 100) / 2))
@@ -831,53 +924,88 @@ def build_scorecard(
 
     risk_s = None
     if risk and risk.sharpe is not None:
-        # Map sharpe -1..2 -> 0..100
         risk_s = max(0.0, min(100.0, (risk.sharpe + 1) / 3 * 100))
         if risk.max_drawdown_pct is not None:
-            # penalize deep drawdown
             risk_s = max(0.0, risk_s + risk.max_drawdown_pct / 2)  # dd negative
+        # vol penalty for tradability of stop distance
+        if risk.ann_vol_pct is not None and risk.ann_vol_pct > 45:
+            risk_s = max(0.0, risk_s - 8)
 
-    rs_s = None
-    if rs and rs.alpha_pct is not None:
+    # Prefer multi-horizon RS if provided; else single-window alpha
+    rs_s = multi_rs_score
+    if rs_s is None and rs and rs.alpha_pct is not None:
         rs_s = max(0.0, min(100.0, 50 + rs.alpha_pct * 2))
 
-    parts = [x for x in (tech, funda_s, risk_s, rs_s) if x is not None]
-    total = float(np.mean(parts)) if parts else None
+    reg_s = max(0.0, min(100.0, float(regime_score))) if regime_score is not None else None
+    liq_s = max(0.0, min(100.0, float(liquidity_score))) if liquidity_score is not None else None
+
+    weight_map = {
+        "technical": (tech, 0.22),
+        "funda": (funda_s, 0.22),
+        "risk": (risk_s, 0.18),
+        "rs": (rs_s, 0.15),
+        "regime": (reg_s, 0.13),
+        "liquidity": (liq_s, 0.10),
+    }
+    acc = 0.0
+    w_sum = 0.0
+    used: dict[str, float] = {}
+    for name, (val, w) in weight_map.items():
+        if val is None:
+            continue
+        acc += float(val) * w
+        w_sum += w
+        used[name] = w
+    total = float(acc / w_sum) if w_sum > 0 else None
+    # renormalize displayed weights to sum 1
+    if w_sum > 0:
+        used = {k: round(v / w_sum, 3) for k, v in used.items()}
+
     grade = _grade(total)
 
     if total is None:
         stance = "—"
-    elif total >= 60:
+    elif total >= 62:
         stance = "综合偏多"
-    elif total <= 40:
+    elif total <= 42:
         stance = "综合偏空"
     else:
         stance = "综合中性"
 
     bullets = []
     if tech is not None:
-        bullets.append(f"技术面 {tech:.0f} 分")
+        bullets.append(f"技术时机 {tech:.0f}")
     if funda_s is not None:
-        bullets.append(f"基本面 {funda_s:.0f} 分（{funda.grade}）")
+        bullets.append(f"基本面 {funda_s:.0f}（{funda.grade}）")
     if risk_s is not None:
-        bullets.append(f"风险调整 {risk_s:.0f} 分（风险{risk.risk_level}）")
+        bullets.append(f"风险调整 {risk_s:.0f}（{risk.risk_level}）")
     if rs_s is not None:
-        bullets.append(f"相对强弱 {rs_s:.0f} 分（{rs.rs_rating}）")
+        label = getattr(rs, "rs_rating", "—") if rs else "—"
+        bullets.append(f"相对强弱 {rs_s:.0f}（{label}）")
+    if reg_s is not None:
+        bullets.append(f"市场环境 {reg_s:.0f}")
+    if liq_s is not None:
+        bullets.append(f"流动性 {liq_s:.0f}")
 
     summary = (
         f"**{stance}** · 综合评分 **{total:.0f}**（{grade}）。" if total is not None else "评分数据不足。"
     )
     if bullets:
         summary += " " + "；".join(bullets) + "。"
+    if used:
+        summary += " 权重已按可得数据归一。"
 
     return Scorecard(
         technical_score=tech,
         funda_score=funda_s,
         risk_score=risk_s,
         rs_score=rs_s,
-        total_score=total,
+        regime_score=reg_s,
+        liquidity_score=liq_s,
+        total_score=round(total, 1) if total is not None else None,
         total_grade=grade,
         stance=stance,
         bullets=bullets,
         summary=summary,
+        weights_used=used,
     )

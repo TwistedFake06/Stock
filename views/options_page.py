@@ -85,23 +85,31 @@ def render_options(symbol: str) -> None:
         width_mode = st.selectbox("宽度", ["自动", "1", "2", "5", "10"], index=0)
 
     st.markdown("#### 風險參數（1R 風控）")
+    HKD_PER_USD = 7.8
     r1, r2 = st.columns(2)
     with r1:
-        account_size = st.number_input(
-            "帳戶資金 (USD)",
+        account_hkd = st.number_input(
+            "帳戶資金 (HKD)",
             min_value=1000.0,
             value=50000.0,
             step=1000.0,
-            help="你的交易帳戶總資金",
+            help="默认 50,000 HKD；期權美元標的會按匯率折算",
         )
     with r2:
-        risk_per_trade = st.number_input(
-            "單筆最大風險 1R (USD)",
-            min_value=50.0,
-            value=500.0,
-            step=50.0,
-            help="單筆最多願意虧的金額（嚴格風控）",
+        risk_pct_opt = st.number_input(
+            "單筆風險 1R (%)",
+            min_value=0.25,
+            max_value=5.0,
+            value=1.0,
+            step=0.25,
+            help="相對帳戶資金的百分比",
         )
+    account_size = float(account_hkd) / HKD_PER_USD
+    risk_per_trade = account_size * (float(risk_pct_opt) / 100.0)
+    st.caption(
+        f"約合 USD {account_size:,.0f} · 1R ≈ USD {risk_per_trade:,.0f} "
+        f"(HKD {account_hkd * risk_pct_opt / 100:,.0f})"
+    )
 
     with st.spinner("扫描方向与价差…"):
         hist_opt = fetch_history(opt_sym, period="6mo", interval="1d")

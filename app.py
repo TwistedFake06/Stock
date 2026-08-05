@@ -1,6 +1,6 @@
 """
 股票分析助手 — Streamlit 桌面/浏览器应用
-支持美股、港股、A股（Yahoo Finance 代码）
+快速选择 / 自选：美股为主。资金默认 50,000 HKD。
 
 Streamlit Cloud / 本地入口固定为本文件；页面实现在 views/（勿改名 pages/，
 以免触发 Streamlit multipage 自动导航）。
@@ -8,6 +8,7 @@ Streamlit Cloud / 本地入口固定为本文件；页面实现在 views/（勿�
 
 from __future__ import annotations
 
+import importlib
 import sys
 from pathlib import Path
 
@@ -18,14 +19,24 @@ if str(_ROOT) not in sys.path:
 
 import streamlit as st
 
+
+def _load_stock_service():
+    """Load stock_service; force reload if a stale process-level module is missing helpers."""
+    import stock_service as _ss
+
+    if not hasattr(_ss, "filter_us_only") or not hasattr(_ss, "is_us_symbol"):
+        _ss = importlib.reload(_ss)
+    return _ss
+
+
 try:
-    from stock_service import (
-        INTERVAL_MAP,
-        PERIOD_MAP,
-        normalize_symbol,
-    )
+    _ss = _load_stock_service()
+    INTERVAL_MAP = _ss.INTERVAL_MAP
+    PERIOD_MAP = _ss.PERIOD_MAP
+    filter_us_only = _ss.filter_us_only
+    is_us_symbol = _ss.is_us_symbol
+    normalize_symbol = _ss.normalize_symbol
     from ui_mobile import inject_ios_safari_support, inject_mobile_css
-    from views.backtest_page import render_backtest
     from views.bias_page import render_bias_page
     from views.common import load_watchlist
     from views.compare_page import render_compare
@@ -33,6 +44,7 @@ try:
     from views.entry_page import render_entry
     from views.extra_page import render_extra
     from views.options_page import render_options
+    from views.scan_page import render_scan
     from views.sop_page import render_sop
     from views.technical_page import render_technical
     from views.watchlist_page import render_watchlist
@@ -96,20 +108,27 @@ inject_mobile_css()
 # ---- session state ----
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = load_watchlist()
+else:
+    # Drop non-US from quick-select / saved list
+    st.session_state.watchlist = filter_us_only(list(st.session_state.watchlist))
 if "symbol" not in st.session_state:
     st.session_state.symbol = st.session_state.watchlist[0]
+else:
+    # If current symbol is non-US, snap to first US watch item
+    if not is_us_symbol(str(st.session_state.symbol)):
+        st.session_state.symbol = st.session_state.watchlist[0]
 
 # ---- sidebar ----
 with st.sidebar:
     st.markdown("### 📊 投资 SOP")
-    st.caption("首页 = 投资SOP · 选股即给出场决策卡")
+    st.caption("首页 = 投资SOP · 快速选择仅美股 · 资金 HKD")
 
     page = st.selectbox(
         "功能页面",
         [
             "投资SOP",
+            "Watchlist扫描",
             "期权价差",
-            "回测复盘",
             "行情看板",
             "多空分析",
             "入场与目标价",
@@ -125,8 +144,8 @@ with st.sidebar:
     symbol_input = st.text_input(
         "股票代码",
         value=st.session_state.symbol,
-        placeholder="AAPL / 0700.HK / 600519",
-        help="A股 6 位代码；港股 .HK；美股代码",
+        placeholder="AAPL / NVDA / SPY",
+        help="快速选择仅美股；手动可输入其他 Yahoo 代码",
     )
     if symbol_input:
         st.session_state.symbol = normalize_symbol(symbol_input)
@@ -137,16 +156,16 @@ with st.sidebar:
     interval = INTERVAL_MAP[interval_label]
 
     st.divider()
-    st.markdown("**快速选择**")
+    st.markdown("**快速选择（美股）**")
     cols = st.columns(2)
-    for i, s in enumerate(st.session_state.watchlist[:10]):
+    for i, s in enumerate(st.session_state.watchlist[:12]):
         if cols[i % 2].button(s, key=f"quick_{s}", use_container_width=True):
             st.session_state.symbol = s
             st.rerun()
 
     st.divider()
     st.caption(
-        "数据: Yahoo Finance（可能延迟）· 实盘辅助模型 · 不构成投资建议"
+        "数据: Yahoo Finance · 本金默认 50,000 HKD · 不构成投资建议"
     )
 
 
@@ -155,6 +174,8 @@ symbol = st.session_state.symbol
 # ---- router (thin shell for Cloud + local) ----
 if page == "投资SOP":
     render_sop(symbol, period, interval, period_label, interval_label)
+elif page == "Watchlist扫描":
+    render_scan(period, interval, period_label)
 elif page == "行情看板":
     render_dashboard(symbol, period, interval, period_label, interval_label)
 elif page == "多空分析":
@@ -165,8 +186,6 @@ elif page == "入场与目标价":
     render_entry(symbol, period, interval, period_label, interval_label)
 elif page == "期权价差":
     render_options(symbol)
-elif page == "回测复盘":
-    render_backtest()
 elif page == "技术分析":
     render_technical(symbol, period, interval, period_label, interval_label)
 elif page == "多股对比":

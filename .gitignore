@@ -7,3 +7,8 @@ watchlist.json
 *.log
 .DS_Store
 .streamlit/secrets.toml
+.env
+.env.*
+!.env.example
+secrets.local.env
+*.local.env

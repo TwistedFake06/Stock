@@ -6,13 +6,21 @@ import streamlit as st
 
 from analysis import analyze_bias, bias_emoji
 from indicators import enrich
-from stock_service import (
-    DEFAULT_WATCHLIST,
-    cache_bucket,
-    cached_info,
-    fetch_history,
-    normalize_symbol,
-)
+import stock_service as _ss
+
+if not hasattr(_ss, "filter_us_only"):
+    import importlib
+
+    _ss = importlib.reload(_ss)
+
+DEFAULT_WATCHLIST = _ss.DEFAULT_WATCHLIST
+cache_bucket = _ss.cache_bucket
+cached_info = _ss.cached_info
+fetch_history = _ss.fetch_history
+filter_us_only = _ss.filter_us_only
+is_us_symbol = _ss.is_us_symbol
+normalize_symbol = _ss.normalize_symbol
+
 from views.common import fmt_number, get_price_fields, save_watchlist
 
 
@@ -24,8 +32,11 @@ def render_watchlist(period: str, interval: str) -> None:
         new_sym = st.text_input("添加代码", placeholder="例如 NVDA 或 300750")
         if st.button("添加", type="primary") and new_sym.strip():
             ns = normalize_symbol(new_sym)
-            if ns not in st.session_state.watchlist:
+            if not is_us_symbol(ns):
+                st.error("快速自选仅支持美股代码（已过滤港股/A股）。")
+            elif ns not in st.session_state.watchlist:
                 st.session_state.watchlist.append(ns)
+                st.session_state.watchlist = filter_us_only(st.session_state.watchlist)
                 save_watchlist(st.session_state.watchlist)
                 st.success(f"已添加 {ns}")
                 st.rerun()

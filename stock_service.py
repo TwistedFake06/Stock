@@ -9,17 +9,49 @@ from typing import Any
 import pandas as pd
 import yfinance as yf
 
-# Common A-share / HK / US examples for the UI
+# US-only quick list (no HK / A-share)
 DEFAULT_WATCHLIST = [
     "AAPL",
     "MSFT",
     "NVDA",
+    "GOOGL",
+    "AMZN",
+    "META",
     "TSLA",
-    "0700.HK",
-    "9988.HK",
-    "600519.SS",  # 贵州茅台
-    "000001.SZ",  # 平安银行
+    "SPY",
+    "QQQ",
+    "AMD",
+    "QCOM",
+    "ORCL",
+    "MU",
 ]
+
+
+def is_us_symbol(symbol: str) -> bool:
+    """True for US tickers; False for HK / A-share / BJ codes."""
+    s = (symbol or "").strip().upper()
+    if not s:
+        return False
+    if s.endswith((".HK", ".SS", ".SZ", ".BJ", ".SH")):
+        return False
+    # pure 6-digit China codes
+    if s.isdigit() and len(s) == 6:
+        return False
+    return True
+
+
+def filter_us_only(symbols: list[str]) -> list[str]:
+    """Keep US tickers only (deduped); fall back to DEFAULT_WATCHLIST if empty."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for s in symbols:
+        n = normalize_symbol(str(s))
+        if not n or not is_us_symbol(n) or n in seen:
+            continue
+        seen.add(n)
+        out.append(n)
+    return out if out else list(DEFAULT_WATCHLIST)
+
 
 PERIOD_MAP = {
     "1月": "1mo",

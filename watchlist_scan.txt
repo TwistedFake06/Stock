@@ -1,0 +1,20 @@
+# Watchlist for SOP scan page
+# One symbol per line
+AAPL
+MSFT
+NVDA
+GOOGL
+AMZN
+META
+TSLA
+SPY
+QQQ
+AMD
+QCOM
+ORCL
+MU
+IONQ
+RGTI
+ONDS
+SNDK
+VRT

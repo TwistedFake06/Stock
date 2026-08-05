@@ -44,6 +44,14 @@ if errorlevel 1 (
   )
 )
 
+REM Load local API keys from .env (gitignored) if present
+if exist "%~dp0.env" (
+  for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%~dp0.env") do (
+    if not "%%A"=="" if not "%%B"=="" set "%%A=%%B"
+  )
+  echo Loaded secrets from .env
+)
+
 echo Starting Streamlit at http://localhost:8501
 echo Press Ctrl+C to stop.
 "%VENV_PY%" -m streamlit run "%~dp0app.py"

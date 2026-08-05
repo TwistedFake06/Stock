@@ -20,14 +20,17 @@ def render_sop(
         "选股后直接给出：适不适合入场、价位、胜率、稳定度、该做什么"
     )
 
+    # HKD account → convert to USD for share sizing (US quotes are USD)
+    HKD_PER_USD = 7.8
     c1, c2 = st.columns(2)
     with c1:
-        capital = st.number_input(
-            "账户本金 (USD)",
+        capital_hkd = st.number_input(
+            "账户本金 (HKD)",
             min_value=1000.0,
-            value=float(st.session_state.get("sop_capital", 50_000.0)),
+            value=float(st.session_state.get("sop_capital_hkd", 50_000.0)),
             step=1000.0,
             key="sop_capital_input",
+            help="默认 50,000 HKD；仓位按约 7.8 HKD/USD 换成美元计价",
         )
     with c2:
         risk_pct = st.number_input(
@@ -38,15 +41,19 @@ def render_sop(
             step=0.25,
             key="sop_risk_input",
         )
-    st.session_state["sop_capital"] = capital
+    st.session_state["sop_capital_hkd"] = capital_hkd
     st.session_state["sop_risk_pct"] = risk_pct
+    capital_usd = float(capital_hkd) / HKD_PER_USD
+    st.caption(
+        f"约合 USD {capital_usd:,.0f}（{HKD_PER_USD} HKD/USD）· 1R ≈ HKD {capital_hkd * risk_pct / 100:,.0f}"
+    )
 
     with st.spinner("生成实盘 SOP…"):
         sop = build_trade_sop(
             symbol,
             period=period,
             interval=interval,
-            capital=float(capital),
+            capital=float(capital_usd),
             risk_pct=float(risk_pct),
         )
 
@@ -99,15 +106,51 @@ def render_sop(
         sop.stability_label,
     )
 
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("R:R (T1)", f"{sop.rr_t1:.2f}" if sop.rr_t1 is not None else "—")
-    m2.metric("建议股数", f"{sop.position_shares}")
-    m3.metric("风险等级", sop.risk_level)
-    m4.metric(
-        "最大回撤",
-        f"{sop.max_dd_pct:.1f}%" if sop.max_dd_pct is not None else "—",
+    m2.metric(
+        "期望 E[R]",
+        f"{sop.expectancy_r:+.2f}R" if getattr(sop, "expectancy_r", None) is not None else "—",
+    )
+    m3.metric("建议股数", f"{sop.position_shares}")
+    m4.metric("风险等级", sop.risk_level)
+    m5.metric(
+        "市场环境",
+        getattr(sop, "regime_label", "—") or "—",
+        f"{sop.regime_score:.0f}" if getattr(sop, "regime_score", None) is not None else None,
+    )
+    m6.metric(
+        "流动性",
+        getattr(sop, "liquidity_label", "—") or "—",
+        f"{sop.liquidity_score:.0f}" if getattr(sop, "liquidity_score", None) is not None else None,
     )
     st.caption(sop.position_note)
+
+    # ---- Market regime / quality context ----
+    if getattr(sop, "regime_summary", None) or getattr(sop, "multi_rs_summary", None):
+        with st.expander("市场环境 · 强弱 · 质量（免费数据）", expanded=True):
+            if sop.regime_summary:
+                st.markdown(sop.regime_summary)
+            if sop.regime_bullets:
+                for b in sop.regime_bullets[:6]:
+                    st.caption(b)
+            if sop.multi_rs_summary:
+                st.markdown(sop.multi_rs_summary)
+            if sop.quality_notes:
+                st.markdown("**标的质量提示**")
+                for q in sop.quality_notes[:5]:
+                    st.caption(f"· {q}")
+            if sop.news_summary:
+                st.caption(sop.news_summary)
+            if sop.scorecard_bullets:
+                st.caption("评分分项：" + "；".join(sop.scorecard_bullets))
+            if sop.data_sources:
+                st.caption("数据源：" + " · ".join(sop.data_sources))
+            st.caption(
+                "可选免费 API：`FRED_API_KEY`（宏观）· `FINNHUB_API_KEY`（新闻条数）· "
+                "`ALPHAVANTAGE_API_KEY`（基本面 OVERVIEW + 新闻情绪）。"
+                "不设也能用 yfinance 的 VIX/SPY/10Y。AV 免费额度紧，已做长缓存。"
+            )
 
     # ---- What to do ----
     st.markdown("### 现在该做什么")
@@ -142,21 +185,27 @@ def render_sop(
             )
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-    with st.expander("模型说明（简）", expanded=False):
+    with st.expander("模型说明（实盘向）", expanded=False):
         st.markdown(
             """
-**投资 SOP（实盘辅助）如何算出：**
+**投资 SOP 如何算（偏真实下单决策）：**
 
 | 字段 | 方法 |
 |------|------|
-| 适不适合入场 | 入场评级 + 多空分 + 稳定度 + 路径胜率 + R:R |
-| 入场价 | 技术结构给出的买卖区；区内用现价，区外用中位挂单价 |
+| 适不适合入场 | 入场结构 + 多空 + 稳定度 + 路径胜率 + R:R + **期望E[R]** + **市场环境** + **流动性** |
+| 入场价 | 技术结构买卖区；区内用现价，区外用中位限价 |
 | 止损 / T1 T2 | ATR/结构止损 + 短中期目标 |
-| 胜率 | 历史路径：先到 T1 再触止损 的比例，混合日线胜率 |
+| 胜率 | 历史路径：先到 T1 再触止损（70%）+ 日线上涨日占比（30%） |
+| 期望 E[R] | 胜率×盈亏比 − (1−胜率)×1R；负期望默认不应满仓做多 |
 | 稳定度 | 波动、最大回撤、夏普、趋势强度 |
+| 市场环境 | 免费：VIX + SPY 均线结构 + 10Y + HYG；可选 FRED 利差 |
+| 可选 Alpha Vantage | OVERVIEW 补全基本面空字段 + NEWS_SENTIMENT 情绪（需免费 key） |
+| 综合分 | 技术22 / 基本面22 / 风险18 / 多周期RS15 / 环境13 / 流动性10 |
 | 股数 | 本金 × 1R% ÷ (入场−止损)，按手数取整 |
 
-数据源 Yahoo 可能延迟。**非投顾、非保证收益。**
+硬门槛示例：VIX/大盘避险、临近财报、流动性过差 → 不会给「适合入场」。
+
+数据可能延迟。**非投顾、非保证收益。**
             """
         )
         for n in sop.notes:

@@ -10,10 +10,32 @@ import streamlit as st
 
 from analysis import BiasReport, bias_color, bias_emoji
 from charts import bias_gauge
-from stock_service import DEFAULT_WATCHLIST
+import stock_service as _stock_service
+
+# Tolerate stale Streamlit workers that cached an older stock_service
+if not hasattr(_stock_service, "filter_us_only"):
+    import importlib
+
+    _stock_service = importlib.reload(_stock_service)
+
+DEFAULT_WATCHLIST = _stock_service.DEFAULT_WATCHLIST
+filter_us_only = _stock_service.filter_us_only
+
 from ui_mobile import metric_grid, plotly_chart as mobile_plotly
 
 WATCHLIST_FILE = Path(__file__).resolve().parent.parent / "watchlist.json"
+
+# Public re-export (also available from stock_service)
+__all__ = [
+    "filter_us_only",
+    "fmt_number",
+    "fmt_pct",
+    "get_price_fields",
+    "html_plain",
+    "load_watchlist",
+    "render_bias_banner",
+    "save_watchlist",
+]
 
 
 def html_plain(text: object) -> str:
@@ -100,7 +122,9 @@ def load_watchlist() -> list[str]:
         try:
             data = json.loads(WATCHLIST_FILE.read_text(encoding="utf-8"))
             if isinstance(data, list) and data:
-                return [str(x) for x in data]
+                us = filter_us_only([str(x) for x in data])
+                if us:
+                    return us
         except Exception:
             pass
     return list(DEFAULT_WATCHLIST)
@@ -108,6 +132,7 @@ def load_watchlist() -> list[str]:
 
 def save_watchlist(items: list[str]) -> None:
     """Persist watchlist when filesystem allows (local); session always holds truth."""
+    items = filter_us_only([str(x) for x in items])
     try:
         WATCHLIST_FILE.write_text(
             json.dumps(items, ensure_ascii=False, indent=2),
