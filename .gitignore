@@ -13,4 +13,5 @@ watchlist.json
 secrets.local.env
 *.local.env
 data/alert_state.json
+data/trade_journal.json
 

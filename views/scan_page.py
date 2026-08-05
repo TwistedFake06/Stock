@@ -82,7 +82,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     )
 
     HKD_PER_USD = 7.8
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
         capital_hkd = st.number_input(
             "本金 HKD",
@@ -94,17 +94,27 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     with c2:
         risk_pct = st.number_input("1R %", min_value=0.25, max_value=5.0, value=1.0, step=0.25)
     with c3:
+        horizon_ui = st.selectbox(
+            "主周期",
+            ["0–2周", "2–4周"],
+            index=0,
+            help="按此周期判定可入場（含滑点净R:R）",
+        )
+    with c4:
         min_level = st.selectbox(
             "顯示級別",
             ["适合+谨慎", "仅适合入场", "全部"],
             index=0,
         )
-    with c4:
+    with c5:
         st.write("")
         st.write("")
-        save_list = st.checkbox("掃完寫入 watchlist_scan.txt", value=True)
+        save_list = st.checkbox("寫入 scan 檔", value=True)
     capital = float(capital_hkd) / HKD_PER_USD
-    st.caption(f"仓位按 USD 计价：约 ${capital:,.0f}（{HKD_PER_USD} HKD/USD）")
+    primary_horizon = "h1" if horizon_ui == "0–2周" else "h2"
+    st.caption(
+        f"仓位 USD≈${capital:,.0f} · 主周期 **{horizon_ui}** · 含出场/净R:R 逻辑"
+    )
 
     if src == "App 自選股":
         symbols = []
@@ -125,7 +135,10 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     import time as _time
 
     list_key = hashlib.md5(
-        (",".join(symbols) + f"|{period}|{interval}|{capital:.0f}|{risk_pct}").encode()
+        (
+            ",".join(symbols)
+            + f"|{period}|{interval}|{capital:.0f}|{risk_pct}|{primary_horizon}"
+        ).encode()
     ).hexdigest()[:12]
     cache_key = f"scan_cache_{list_key}"
     cache_ttl_sec = 15 * 60  # 15 分钟内同清单结果固定，减少「10分钟三样」
@@ -182,14 +195,19 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                         interval=interval,
                         capital=float(capital),
                         risk_pct=float(risk_pct),
+                        primary_horizon=primary_horizon,
                     )
                     h1 = getattr(sop, "swing_h1", None)
                     h2 = getattr(sop, "swing_h2", None)
+                    prim = getattr(sop, "primary_plan", None) or h1
+                    exit_pl = getattr(sop, "exit_plan", None)
                     rows_all.append(
                         {
                             "代码": sop.symbol,
                             "名称": sop.name,
                             "结论": sop.enter_ok,
+                            "主周期": getattr(prim, "label", horizon_ui) if prim else horizon_ui,
+                            "主结论": getattr(prim, "verdict", "—") if prim else "—",
                             "0-2周": getattr(h1, "verdict", "—") if h1 else "—",
                             "2-4周": getattr(h2, "verdict", "—") if h2 else "—",
                             "适合度": sop.enter_score,
@@ -203,7 +221,12 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                             "胜率0-2周%": getattr(h1, "win_rate_pct", None) if h1 else None,
                             "胜率2-4周%": getattr(h2, "win_rate_pct", None) if h2 else None,
                             "R:R_0-2周": getattr(h1, "rr", None) if h1 else sop.rr_t1,
+                            "净R:R": getattr(prim, "rr_net", None) if prim else None,
                             "E[R]_0-2周": getattr(h1, "expectancy_r", None) if h1 else None,
+                            "净E[R]": getattr(prim, "expectancy_net", None) if prim else None,
+                            "时间止损日": getattr(exit_pl, "max_hold_days", None)
+                            if exit_pl
+                            else None,
                             # legacy keys for rest of page
                             "入场低": sop.entry_low,
                             "入场高": sop.entry_high,
@@ -232,6 +255,11 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                             "跟势": getattr(sop, "trend_align_label", "—") or "—",
                             "跟势分": getattr(sop, "trend_align_score", None),
                             "逆势": "是" if getattr(sop, "against_trend", False) else "",
+                            "周线": getattr(sop, "weekly_label", "—") or "—",
+                            "1H": getattr(sop, "h1_label", "—") or "—",
+                            "1H可掛": "是" if getattr(sop, "h1_ready", False) else "",
+                            "ADX": getattr(sop, "adx_label", "—") or "—",
+                            "ADX值": getattr(sop, "adx_value", None),
                             "市场环境": getattr(sop, "regime_label", "—") or "—",
                             "建议股数": sop.position_shares,
                             "立刻动作": "；".join(sop.actions_now[:2]) if sop.actions_now else "",
@@ -330,8 +358,9 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         display_cols = [
             "代码",
             "名称",
-            "0-2周",
-            "2-4周",
+            "主周期",
+            "主结论",
+            "结论",
             "现价",
             "入場低",
             "入場高",
@@ -340,15 +369,13 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
             "目标2-4周",
             "胜率0-2周%",
             "胜率2-4周%",
-            "R:R_0-2周",
-            "E[R]_0-2周",
-            "量能",
-            "跟势",
-            "逆势",
-            "假突破",
-            "假突破风险",
-            "板块RS",
-            "IV",
+            "净R:R",
+            "净E[R]",
+            "时间止损日",
+            "0-2周",
+            "2-4周",
+            "1H",
+            "周线",
             "建议股数",
         ]
         st.dataframe(

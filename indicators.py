@@ -63,13 +63,84 @@ def add_macd(
     return out
 
 
+def add_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+    """Average True Range."""
+    out = df.copy()
+    high = out["High"].astype(float)
+    low = out["Low"].astype(float)
+    close = out["Close"].astype(float)
+    prev = close.shift(1)
+    tr = pd.concat(
+        [(high - low).abs(), (high - prev).abs(), (low - prev).abs()],
+        axis=1,
+    ).max(axis=1)
+    out["ATR"] = tr.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    return out
+
+
+def add_adx(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+    """
+    ADX + DI+/DI- (Wilder-style smoothing via ewm alpha=1/period).
+    ADX high → trending; low → choppy (avoid breakout chase).
+    """
+    out = df.copy()
+    if not {"High", "Low", "Close"}.issubset(out.columns) or len(out) < period + 5:
+        out["PLUS_DI"] = pd.NA
+        out["MINUS_DI"] = pd.NA
+        out["ADX"] = pd.NA
+        return out
+
+    high = out["High"].astype(float)
+    low = out["Low"].astype(float)
+    close = out["Close"].astype(float)
+    prev_close = close.shift(1)
+    prev_high = high.shift(1)
+    prev_low = low.shift(1)
+
+    up_move = high - prev_high
+    down_move = prev_low - low
+    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+
+    tr = pd.concat(
+        [
+            (high - low).abs(),
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+
+    atr = tr.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    plus_di = 100 * (
+        plus_dm.ewm(alpha=1 / period, min_periods=period, adjust=False).mean() / atr
+    )
+    minus_di = 100 * (
+        minus_dm.ewm(alpha=1 / period, min_periods=period, adjust=False).mean() / atr
+    )
+    dx = (100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, pd.NA)).fillna(0)
+    adx = dx.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+
+    out["PLUS_DI"] = plus_di
+    out["MINUS_DI"] = minus_di
+    out["ADX"] = adx
+    return out
+
+
 def enrich(df: pd.DataFrame) -> pd.DataFrame:
     """Apply a standard set of indicators."""
     if df is None or df.empty:
         return df
     out = add_sma(df)
     out = add_ema(out)
+    # short-term EMAs for 1H / swing timing
+    for w in (9, 21):
+        if f"EMA{w}" not in out.columns:
+            out[f"EMA{w}"] = out["Close"].ewm(span=w, adjust=False).mean()
     out = add_bollinger(out)
     out = add_rsi(out)
     out = add_macd(out)
+    if {"High", "Low"}.issubset(out.columns):
+        out = add_atr(out)
+        out = add_adx(out)
     return out

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -12,6 +13,10 @@ from edge_signals import (
     analyze_volume_confirm,
     map_sector_etf,
 )
+from exit_plan import apply_long_slippage, build_exit_plan
+from mtf_signals import analyze_adx, analyze_fib_levels, merge_entry_with_fib
+from indicators import enrich
+from trade_journal import add_trade, close_trade, journal_stats, load_trades, save_trades
 from free_data import analyze_liquidity, multi_horizon_rs
 from trade_sop import (
     _enter_decision,
@@ -258,6 +263,94 @@ class TestTradeSOPHelpers(unittest.TestCase):
         r = analyze_trend_align(df, sector="Technology", industry="Software")
         self.assertIn(r.label, ("强跟势", "跟势", "中性", "逆势", "—"))
         self.assertTrue(0 <= r.score <= 100)
+
+    def test_adx_and_fib_offline(self):
+        n = 80
+        rng = np.random.default_rng(1)
+        close = 100 * np.cumprod(1 + rng.normal(0.002, 0.015, n))
+        high = close * 1.01
+        low = close * 0.99
+        df = pd.DataFrame(
+            {"Open": close, "High": high, "Low": low, "Close": close, "Volume": np.full(n, 1e6)}
+        )
+        df = enrich(df)
+        adx = analyze_adx(df)
+        self.assertTrue(adx.available)
+        self.assertIsNotNone(adx.adx)
+        fib = analyze_fib_levels(df)
+        self.assertTrue(fib.available)
+        self.assertIsNotNone(fib.level_618)
+        lo, hi, note = merge_entry_with_fib(95, 105, fib)
+        self.assertIsNotNone(lo)
+        self.assertIsNotNone(hi)
+
+    def test_weekly_blocks_full_entry(self):
+        v = _swing_verdict(
+            entry_opp="较佳入场",
+            bias_label="看多",
+            bias_score=30,
+            wr=60,
+            rr=1.5,
+            exp_r=0.3,
+            price_far_chase=False,
+            weekly_allow_long=False,
+            trend_score=70,
+        )
+        # 周线空头不能「可以入場」
+        self.assertNotEqual(v, "可以入場")
+
+    def test_slippage_rr_worse_than_paper(self):
+        slip = apply_long_slippage(100.0, 95.0, 110.0, win_rate_pct=55, slip_pct=0.002)
+        self.assertIsNotNone(slip.rr_paper)
+        self.assertIsNotNone(slip.rr_net)
+        self.assertLess(slip.rr_net, slip.rr_paper)
+
+    def test_exit_plan_rules(self):
+        ep = build_exit_plan(
+            horizon_key="h1",
+            horizon_label="0–2周",
+            max_hold_days=10,
+            entry=100.0,
+            stop=96.0,
+            t1=108.0,
+            t2=112.0,
+        )
+        self.assertEqual(ep.max_hold_days, 10)
+        self.assertEqual(ep.scale_out_pct, 0.5)
+        self.assertIsNotNone(ep.stop_after_t1)
+        self.assertTrue(any("时间止损" in b for b in ep.bullets))
+
+    def test_journal_roundtrip(self):
+        # isolate temp journal by monkeypatch path would be ideal; use real file carefully
+        from trade_journal import JOURNAL_PATH
+        import tempfile
+        import trade_journal as tj
+
+        old = tj.JOURNAL_PATH
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                tj.JOURNAL_PATH = Path(td) / "j.json"
+                save_trades([])
+                row = add_trade(
+                    symbol="TEST",
+                    entry=10.0,
+                    stop=9.0,
+                    target=12.0,
+                    shares=100,
+                    model_wr=55.0,
+                    model_rr=2.0,
+                    model_verdict="可以試倉",
+                )
+                self.assertEqual(row["status"], "open")
+                closed = close_trade(row["id"], exit_price=12.0, exit_reason="t1")
+                self.assertIsNotNone(closed)
+                self.assertEqual(closed["status"], "closed")
+                self.assertAlmostEqual(float(closed["result_r"]), 2.0, places=2)
+                st = journal_stats()
+                self.assertEqual(st["closed"], 1)
+                self.assertAlmostEqual(st["win_rate"], 100.0, places=0)
+        finally:
+            tj.JOURNAL_PATH = old
 
     def test_expectancy(self):
         # 55% win, 2R reward → 0.55*2 - 0.45*1 = 0.65

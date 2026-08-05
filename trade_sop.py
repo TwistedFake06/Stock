@@ -26,6 +26,14 @@ from extra_analysis import (
     default_benchmark,
 )
 from edge_signals import edge_bundle
+from exit_plan import (
+    DEFAULT_SLIP_PCT,
+    ExitPlan,
+    SlippageRR,
+    apply_long_slippage,
+    build_exit_plan,
+)
+from mtf_signals import mtf_bundle
 from free_data import (
     analyze_liquidity,
     extract_quality_extras,
@@ -66,6 +74,10 @@ class SwingHorizonPlan:
     risk_per_share: float | None
     reward_per_share: float | None
     note: str = ""
+    # 滑点后可执行赔率
+    rr_net: float | None = None
+    expectancy_net: float | None = None
+    slip_note: str = ""
 
 
 @dataclass
@@ -98,6 +110,11 @@ class TradeSOP:
     swing_h1: SwingHorizonPlan | None = None  # 0–2周
     swing_h2: SwingHorizonPlan | None = None  # 2–4周
     trend_note: str = ""  # 走势一句话
+    # 主周期选择：h1 | h2 — 决定 enter_ok / 出场卡
+    primary_horizon: str = "h1"
+    primary_plan: SwingHorizonPlan | None = None
+    exit_plan: ExitPlan | None = None
+    slip_rr: SlippageRR | None = None
 
     # What to do now
     actions_now: list[str] = field(default_factory=list)
@@ -150,6 +167,17 @@ class TradeSOP:
     trend_align_score: float | None = None
     trend_align_label: str = "—"
     against_trend: bool = False
+    weekly_label: str = "—"
+    weekly_summary: str = ""
+    weekly_allow_long: bool = True
+    adx_label: str = "—"
+    adx_value: float | None = None
+    adx_summary: str = ""
+    adx_trending: bool = False
+    fib_summary: str = ""
+    h1_label: str = "—"
+    h1_summary: str = ""
+    h1_ready: bool = False
 
 
 def _path_win_rate(
@@ -259,6 +287,10 @@ def _swing_verdict(
     against_trend: bool = False,
     trend_label: str = "",
     trend_score: float | None = None,
+    weekly_allow_long: bool = True,
+    adx_trending: bool | None = None,
+    adx_value: float | None = None,
+    h1_ready: bool | None = None,
 ) -> str:
     """
     短线波段结论（偏操作、仍挡明显亏钱结构）:
@@ -268,6 +300,10 @@ def _swing_verdict(
         return "不做多"
     if "看空" in bias_label and bias_score <= -25:
         return "不做多"
+    if not weekly_allow_long:
+        # 周线空头：短线不做「可以入場」；若其他极差直接不做多
+        if bias_score < 0 or entry_opp in ("偏空回避", "不宜追高"):
+            return "不做多"
     if price_far_chase or entry_opp == "不宜追高":
         return "暫緩觀望"
     if vol_label == "放量下跌":
@@ -280,6 +316,10 @@ def _swing_verdict(
     # 逆势（大盘/板块空、个股硬多）→ 不做满仓，最多暂缓
     if against_trend and trend_label == "逆势":
         return "暫緩觀望"
+    # 震荡市 + 追突破形态 → 暂缓（ADX 低）
+    if adx_trending is False and adx_value is not None and adx_value < 18:
+        if entry_opp in ("较佳入场",) and block_breakout_chase:
+            return "暫緩觀望"
     # 赔率太差：短线也难赚
     if rr is not None and rr < 0.95:
         return "暫緩觀望"
@@ -311,13 +351,20 @@ def _swing_verdict(
         and trend_good
         and no_fbo
         and not block_breakout_chase  # 满仓不要在「仅待确认突破」时追
+        and weekly_allow_long
+        and (adx_trending is not False or (adx_value is not None and adx_value >= 18))
     ):
+        # 可以入場：日线OK；1H 未就绪仍可挂限价（ready 仅影响文案）
         return "可以入場"
     if ok_bias and wr_ok and rr_ok and exp_ok and entry_opp not in ("偏空回避",):
         if against_trend:
             return "暫緩觀望"
+        if not weekly_allow_long:
+            # 周线空头最多试仓，且要求日线结构尚可
+            if good_setup and not false_break_risk and wr_ok:
+                return "可以試倉"
+            return "暫緩觀望"
         if block_breakout_chase and not good_setup:
-            # 突破未确认：只允许在入场区内试仓，由 price_far_chase 另挡
             pass
         if (good_setup or bias_score >= 10) and trend_ok and not false_break_risk:
             return "可以試倉"
@@ -348,6 +395,10 @@ def _build_swing_plan(
     against_trend: bool = False,
     trend_label: str = "",
     trend_score: float | None = None,
+    weekly_allow_long: bool = True,
+    adx_trending: bool | None = None,
+    adx_value: float | None = None,
+    h1_ready: bool | None = None,
 ) -> SwingHorizonPlan:
     risk_ps = None
     reward_ps = None
@@ -379,6 +430,10 @@ def _build_swing_plan(
         against_trend=against_trend,
         trend_label=trend_label,
         trend_score=trend_score,
+        weekly_allow_long=weekly_allow_long,
+        adx_trending=adx_trending,
+        adx_value=adx_value,
+        h1_ready=h1_ready,
     )
     note_bits = []
     if wr is not None:
@@ -387,6 +442,23 @@ def _build_swing_plan(
         note_bits.append(f"R:R≈{rr:.2f}")
     if exp_r is not None:
         note_bits.append(f"E[R]≈{exp_r:+.2f}")
+    if h1_ready is True:
+        note_bits.append("1H可掛單")
+    elif h1_ready is False:
+        note_bits.append("等1H/回踩")
+
+    # 滑点后 R:R / E[R]（可执行）
+    entry_ref = (
+        float(display_limit)
+        if display_limit
+        else (float(mid) if mid is not None else None)
+    )
+    slip = apply_long_slippage(
+        entry_ref, stop, target, win_rate_pct=wr, slip_pct=DEFAULT_SLIP_PCT
+    )
+    if slip.rr_net is not None:
+        note_bits.append(f"净R:R≈{slip.rr_net:.2f}")
+
     return SwingHorizonPlan(
         key=key,
         label=label,
@@ -405,6 +477,9 @@ def _build_swing_plan(
         risk_per_share=round(risk_ps, 4) if risk_ps else None,
         reward_per_share=round(reward_ps, 4) if reward_ps else None,
         note=" · ".join(note_bits),
+        rr_net=slip.rr_net,
+        expectancy_net=slip.exp_net,
+        slip_note=slip.note,
     )
 
 
@@ -629,8 +704,14 @@ def build_trade_sop(
     interval: str = "1d",
     capital: float = 50_000.0,
     risk_pct: float = 1.0,
+    primary_horizon: str = "h1",
 ) -> TradeSOP:
-    """Full SOP for one symbol (long-bias equity playbook)."""
+    """
+    Full SOP for one symbol (short-term swing playbook).
+
+    primary_horizon: ``h1`` = 0–2周（默认）, ``h2`` = 2–4周
+    — 决定 enter_ok / 出场纪律 / 主展示计划。
+    """
     sym = normalize_symbol(symbol)
     info = cached_info(sym, cache_bucket(5))
     hist = fetch_history(sym, period=period, interval=interval)
@@ -757,8 +838,24 @@ def build_trade_sop(
     e_low = entry.suggested_entry_low
     e_high = entry.suggested_entry_high
     stop = entry.stop_loss
-    # 评分用「入场区中位」固定 R:R / 期望 / 路径胜率，避免现价每分钟抖动导致可开仓名单乱跳
-    # 展示挂单价：若现价已在区内，可提示用现价限价（但不拿跳动现价重算赔率）
+
+    # 多周期：周线过滤 + ADX + Fib  refinement + 1H 触发
+    weekly = adx_r = fib_r = h1_r = None
+    fib_note = ""
+    try:
+        mtf = mtf_bundle(sym, df, e_low, e_high)
+        weekly = mtf.get("weekly")
+        adx_r = mtf.get("adx")
+        fib_r = mtf.get("fib")
+        h1_r = mtf.get("h1")
+        fib_note = str(mtf.get("fib_note") or "")
+        if mtf.get("entry_low") is not None and mtf.get("entry_high") is not None:
+            e_low = mtf["entry_low"]
+            e_high = mtf["entry_high"]
+    except Exception:
+        pass
+
+    # 评分用「入场区中位」固定 R:R / 期望 / 路径胜率
     if e_low and e_high:
         zone_mid = round((float(e_low) + float(e_high)) / 2.0, 4)
         entry_plan = zone_mid
@@ -770,15 +867,20 @@ def build_trade_sop(
         display_limit = zone_mid
         in_zone = True
 
-    # 现价相对入场区：上方追高会毁掉赔率（用缓冲区，减少边界抖一下就改结论）
+    # 现价相对入场区
     price_above_zone = False
     price_far_chase = False
     if e_high is not None and last > 0:
         eh = float(e_high)
-        if last > eh * 1.02:  # >2% above zone high
+        if last > eh * 1.02:
             price_above_zone = True
-        if last > eh * 1.045:  # >4.5% above zone → 禁止试仓
+        if last > eh * 1.045:
             price_far_chase = True
+
+    weekly_allow = True if weekly is None else bool(getattr(weekly, "allow_long", True))
+    adx_trending = getattr(adx_r, "trending", None) if adx_r else None
+    adx_val = getattr(adx_r, "adx", None) if adx_r else None
+    h1_ready = getattr(h1_r, "ready", None) if h1_r else None
 
     # 短线目标：0–2周用超短/短期；2–4周用短期/中期
     t_ultra = getattr(getattr(targets, "ultra", None), "bull_target", None)
@@ -865,6 +967,17 @@ def build_trade_sop(
     trend_sc = getattr(trend_al, "score", None) if trend_al else None
 
     # 双周期短线计划（主输出）
+    _mtf_kw = dict(
+        false_break_risk=fbo_risk,
+        block_breakout_chase=fbo_block,
+        against_trend=against_tr,
+        trend_label=trend_lab,
+        trend_score=trend_sc,
+        weekly_allow_long=weekly_allow,
+        adx_trending=adx_trending,
+        adx_value=adx_val,
+        h1_ready=h1_ready,
+    )
     swing_h1 = _build_swing_plan(
         key="h1",
         label="0–2周",
@@ -881,11 +994,7 @@ def build_trade_sop(
         bias_score=bias.score,
         price_far_chase=price_far_chase,
         vol_label=vol_label,
-        false_break_risk=fbo_risk,
-        block_breakout_chase=fbo_block,
-        against_trend=against_tr,
-        trend_label=trend_lab,
-        trend_score=trend_sc,
+        **_mtf_kw,
     )
     swing_h2 = _build_swing_plan(
         key="h2",
@@ -903,16 +1012,14 @@ def build_trade_sop(
         bias_score=bias.score,
         price_far_chase=price_far_chase,
         vol_label=vol_label,
-        false_break_risk=fbo_risk,
-        block_breakout_chase=fbo_block,
-        against_trend=against_tr,
-        trend_label=trend_lab,
-        trend_score=trend_sc,
+        **_mtf_kw,
     )
     trend_note = (
-        f"走势：{bias.bias}（{bias.score:+.0f}）· 入场结构 {entry.opportunity}· "
-        f"量能 {vol_label or '—'}· 跟势 {trend_lab or '—'}· "
-        f"假突破 {getattr(fbo, 'label', '—') if fbo else '—'}"
+        f"走势：{bias.bias}（{bias.score:+.0f}）· 入场 {entry.opportunity}· "
+        f"周线 {getattr(weekly, 'label', '—') if weekly else '—'}· "
+        f"ADX {getattr(adx_r, 'label', '—') if adx_r else '—'}· "
+        f"1H {getattr(h1_r, 'label', '—') if h1_r else '—'}· "
+        f"跟势 {trend_lab or '—'}· 假突破 {getattr(fbo, 'label', '—') if fbo else '—'}"
     )
 
     stab, stab_label = _stability_score(risk, trend, bias.score)
@@ -939,13 +1046,31 @@ def build_trade_sop(
         iv_score=getattr(iv_reg, "score", None) if iv_reg else None,
         iv_high_event=bool(getattr(iv_reg, "high_event_risk", False)) if iv_reg else False,
     )
+    # 主周期：决定最终做不做、出场卡、滑点 R:R
+    ph = (primary_horizon or "h1").lower().strip()
+    if ph not in ("h1", "h2"):
+        ph = "h1"
+    primary = swing_h1 if ph == "h1" else swing_h2
+    if primary is None:
+        primary = swing_h1
+
     _map_ok = {
         "可以入場": ("适合入场", "做多"),
         "可以試倉": ("谨慎试仓", "做多"),
         "暫緩觀望": ("观望", "观望"),
         "不做多": ("回避", "偏空"),
     }
-    enter_ok, side = _map_ok.get(swing_h1.verdict, ("观望", "观望"))
+    enter_ok, side = _map_ok.get(primary.verdict, ("观望", "观望"))
+    # 净 R:R 过差时再降级（可执行赔率）
+    if enter_ok in ("适合入场", "谨慎试仓") and primary.rr_net is not None:
+        if primary.rr_net < 0.95:
+            enter_ok, side = "观望", "观望"
+            primary.verdict = "暫緩觀望"
+        elif enter_ok == "适合入场" and primary.rr_net < 1.15:
+            enter_ok, side = "谨慎试仓", "做多"
+            if primary.verdict == "可以入場":
+                primary.verdict = "可以試倉"
+
     # 分数：用波段可操作性映射，方便扫描排序
     enter_score = {
         "适合入场": max(enter_score, 78.0),
@@ -953,6 +1078,25 @@ def build_trade_sop(
         "观望": min(enter_score, 52.0),
         "回避": min(enter_score, 35.0),
     }.get(enter_ok, enter_score)
+
+    # 出场纪律（主周期）
+    exit_pl = build_exit_plan(
+        horizon_key=primary.key,
+        horizon_label=primary.label,
+        max_hold_days=primary.bars,
+        entry=primary.entry_plan or entry_plan,
+        stop=primary.stop_loss or stop,
+        t1=primary.target,
+        t2=(swing_h2.target if primary.key == "h1" else None),
+        scale_out_pct=0.50,
+    )
+    slip_main = apply_long_slippage(
+        primary.entry_plan or entry_plan,
+        primary.stop_loss or stop,
+        primary.target,
+        win_rate_pct=primary.win_rate_pct,
+        slip_pct=DEFAULT_SLIP_PCT,
+    )
 
     # Position: 谨慎试仓强制 0.5R；观望/回避仍给「若强行」参考仓但标注
     lot = suggest_lot_size(sym)
@@ -1158,6 +1302,42 @@ def build_trade_sop(
                 "detail": trend_al.summary,
             }
         )
+    if weekly is not None and getattr(weekly, "available", False):
+        checklist.append(
+            {
+                "name": "周线过滤",
+                "status": "pass"
+                if weekly.allow_long
+                else "fail",
+                "detail": weekly.summary,
+            }
+        )
+    if adx_r is not None and getattr(adx_r, "available", False):
+        checklist.append(
+            {
+                "name": "ADX趋势强度",
+                "status": "pass"
+                if adx_r.trending
+                else "warn",
+                "detail": adx_r.summary,
+            }
+        )
+    if fib_r is not None and getattr(fib_r, "available", False):
+        checklist.append(
+            {
+                "name": "Fib回撤区",
+                "status": "pass" if "Fib回撤区" in (fib_r.label or "") else "warn",
+                "detail": fib_r.summary + (f" · {fib_note}" if fib_note else ""),
+            }
+        )
+    if h1_r is not None and getattr(h1_r, "available", False):
+        checklist.append(
+            {
+                "name": "1H触发",
+                "status": "pass" if h1_r.ready else "warn",
+                "detail": h1_r.summary,
+            }
+        )
 
     # Actions
     actions_now: list[str] = []
@@ -1237,6 +1417,19 @@ def build_trade_sop(
     elif trend_al is not None and trend_al.label in ("强跟势", "跟势"):
         if enter_ok in ("适合入场", "谨慎试仓"):
             actions_now.append("跟势环境OK：顺大盘/板块方向在区内做多更稳")
+    if weekly is not None and not weekly.allow_long:
+        actions_now.append("周线空头：最多试仓/观望，不按强趋势满仓做多")
+    if adx_r is not None and not adx_r.trending:
+        actions_wait.append("ADX震荡：少追突破，优先回踩入场区限价")
+    if h1_r is not None:
+        if h1_r.ready and enter_ok in ("适合入场", "谨慎试仓"):
+            actions_now.append("1H已转强且在区内：可挂限价（勿市价追）")
+        elif h1_r.label == "已遠離":
+            actions_wait.append("1H已远离入场区：等回踩再挂，不追高")
+        elif h1_r.label == "1H偏空":
+            actions_wait.append("1H偏空：等EMA9重新站上EMA21再考虑")
+        elif not h1_r.ready:
+            actions_wait.append(f"1H触发「{h1_r.label}」：先设好限价在入场区，等1H配合")
 
     invalidation = entry.invalidation or (
         f"收盘跌破止损 {stop:.2f} 则本计划作废" if stop else "结构破坏则作废"
@@ -1246,34 +1439,27 @@ def build_trade_sop(
     if regime is not None:
         reg_bit = f"市场 {regime.label}（{regime.score:.0f}）；"
     exp_bit = f"期望 {exp_r:+.2f}R；" if exp_r is not None else ""
-    # 以短线波段语言写摘要（主周期 0–2 周）
+    # 摘要以「主周期」为准
     h1v = swing_h1.verdict
     h2v = swing_h2.verdict
     summary = (
-        f"{sym} 现价 **{last:.2f}** · {trend_note}。\n\n"
-        f"**0–2周** → {h1v}"
-        + (
-            f"：入场 {swing_h1.entry_low}–{swing_h1.entry_high}，"
-            f"止蚀 {swing_h1.stop_loss}，目标 {swing_h1.target}，"
-            f"胜率约 {swing_h1.win_rate_pct}%"
-            if swing_h1.win_rate_pct is not None
-            else ""
-        )
-        + f"；**2–4周** → {h2v}"
-        + (
-            f"：目标 {swing_h2.target}，胜率约 {swing_h2.win_rate_pct}%"
-            if swing_h2.win_rate_pct is not None
-            else ""
-        )
-        + f"。{reg_bit}"
+        f"{sym} 现价 **{last:.2f}** · 主周期 **{primary.label}** → **{primary.verdict}**。\n\n"
+        f"{trend_note}\n\n"
+        f"**主计划**：入场 {primary.entry_low}–{primary.entry_high}，"
+        f"止蚀 {primary.stop_loss}，目标 {primary.target}，"
+        f"胜率 {primary.win_rate_pct}% · 纸面R:R {primary.rr} · "
+        f"净R:R {primary.rr_net}。\n"
+        f"出场：{exit_pl.summary}\n"
+        f"（对照 0–2周={h1v} / 2–4周={h2v}）{reg_bit}"
     )
 
     notes = [
-        "短线波段：0–2周≈10个交易日路径；2–4周≈20个交易日路径",
-        "胜率=历史：同距离止蚀/目标，先到目标算赢（非实盘保证）",
-        "入場价=结构区限价；止蚀=结构/ATR 止损；目标=波动+阻力外推",
-        "R:R 与 E[R] 按入场区中位计算，减少盘中乱跳",
-        "可以入場/試倉仍建议限价，不追离场区过远的价",
+        f"主周期={primary.label}：决定做不做、出场纪律、滑点后R:R",
+        "短线波段：0–2周≈10交易日；2–4周≈20交易日",
+        "胜率=历史路径（先到目标再触止蚀），非实盘保证",
+        f"滑点假设单边 {DEFAULT_SLIP_PCT * 100:.2f}%：净R:R更接近可成交",
+        "出场硬规则：T1减半 → 止蚀保本 → 时间止损 → 破止蚀全出",
+        "限价入场区内，不追高；成交后写交易日志对照真胜率",
         f"区间报酬 {rets.get('total_return_pct'):.1f}%，年化波动 {rets.get('volatility_pct'):.1f}%"
         if rets.get("total_return_pct") is not None and rets.get("volatility_pct") is not None
         else "数据仅供实盘辅助",
@@ -1305,13 +1491,17 @@ def build_trade_sop(
         stop_loss=round(float(stop), 4) if stop else None,
         target_t1=round(float(t1), 4) if t1 else None,
         target_t2=round(float(t2), 4) if t2 else None,
-        win_rate_pct=round(win_rate, 1) if win_rate is not None else None,
+        win_rate_pct=round(primary.win_rate_pct, 1)
+        if primary.win_rate_pct is not None
+        else (round(win_rate, 1) if win_rate is not None else None),
         win_rate_label=wr_label,
         stability_score=stab,
         stability_label=stab_label,
         side=side,
-        risk_per_share=round(risk_ps, 4) if risk_ps else None,
-        rr_t1=round(rr, 2) if rr else None,
+        risk_per_share=round(primary.risk_per_share, 4)
+        if primary.risk_per_share
+        else (round(risk_ps, 4) if risk_ps else None),
+        rr_t1=primary.rr if primary.rr is not None else (round(rr, 2) if rr else None),
         position_shares=int(pos.shares),
         position_note=pos_note,
         actions_now=actions_now,
@@ -1329,7 +1519,9 @@ def build_trade_sop(
         summary=summary,
         period=period,
         notes=notes,
-        expectancy_r=exp_r,
+        expectancy_r=primary.expectancy_r
+        if primary.expectancy_r is not None
+        else exp_r,
         regime_label=getattr(regime, "label", "—") if regime else "—",
         regime_score=getattr(regime, "score", None) if regime else None,
         regime_summary=getattr(regime, "summary", "") if regime else "",
@@ -1354,6 +1546,10 @@ def build_trade_sop(
         swing_h1=swing_h1,
         swing_h2=swing_h2,
         trend_note=trend_note,
+        primary_horizon=ph,
+        primary_plan=primary,
+        exit_plan=exit_pl,
+        slip_rr=slip_main,
         false_break_summary=getattr(fbo, "summary", "") if fbo else "",
         false_break_score=getattr(fbo, "score", None) if fbo else None,
         false_break_label=getattr(fbo, "label", "—") if fbo else "—",
@@ -1362,4 +1558,16 @@ def build_trade_sop(
         trend_align_score=getattr(trend_al, "score", None) if trend_al else None,
         trend_align_label=getattr(trend_al, "label", "—") if trend_al else "—",
         against_trend=bool(getattr(trend_al, "against_trend", False)) if trend_al else False,
+        weekly_label=getattr(weekly, "label", "—") if weekly else "—",
+        weekly_summary=getattr(weekly, "summary", "") if weekly else "",
+        weekly_allow_long=weekly_allow,
+        adx_label=getattr(adx_r, "label", "—") if adx_r else "—",
+        adx_value=adx_val,
+        adx_summary=getattr(adx_r, "summary", "") if adx_r else "",
+        adx_trending=bool(adx_trending) if adx_trending is not None else False,
+        fib_summary=(getattr(fib_r, "summary", "") if fib_r else "")
+        + (f" · {fib_note}" if fib_note else ""),
+        h1_label=getattr(h1_r, "label", "—") if h1_r else "—",
+        h1_summary=getattr(h1_r, "summary", "") if h1_r else "",
+        h1_ready=bool(h1_ready) if h1_ready is not None else False,
     )
