@@ -128,18 +128,35 @@ def _on_symbol_box_change() -> None:
         st.session_state.symbol = ns
 
 
-def _request_symbol(raw: str) -> None:
+PAGE_OPTIONS = [
+    "投资SOP",
+    "Watchlist扫描",
+    "期权价差",
+    "行情看板",
+    "多空分析",
+    "入场与目标价",
+    "综合分析",
+    "技术分析",
+    "多股对比",
+    "自选股",
+]
+
+
+def _request_symbol(raw: str, *, open_sop: bool = False) -> None:
     """
     Queue a symbol change for the *next* run (before text_input is created).
 
     After a widget with key=symbol_box exists, we must not assign
     session_state.symbol_box in the same run — use _pending_symbol instead.
+    If open_sop=True, next run switches nav to 投资SOP for that symbol.
     """
     ns = normalize_symbol(str(raw or "").strip())
     if not ns:
         return
     st.session_state.symbol = ns
     st.session_state._pending_symbol = ns
+    if open_sop:
+        st.session_state._goto_sop = True
 
 
 # Apply pending symbol → input box BEFORE the widget is instantiated
@@ -149,9 +166,18 @@ if "_pending_symbol" in st.session_state:
         st.session_state.symbol = _ps
         st.session_state.symbol_box = _ps
 
-# Seed text box once (only when key does not exist yet)
+# Jump to 投资SOP page (set by quick-select / scan detail / apply)
+if st.session_state.pop("_goto_sop", False):
+    st.session_state.nav_page = "投资SOP"
+
+# Seed text box / nav once
 if "symbol_box" not in st.session_state:
     st.session_state.symbol_box = str(st.session_state.symbol)
+if "nav_page" not in st.session_state:
+    st.session_state.nav_page = "投资SOP"
+# Guard invalid nav value
+if st.session_state.nav_page not in PAGE_OPTIONS:
+    st.session_state.nav_page = "投资SOP"
 
 # ---- sidebar ----
 with st.sidebar:
@@ -160,19 +186,8 @@ with st.sidebar:
 
     page = st.selectbox(
         "功能页面",
-        [
-            "投资SOP",
-            "Watchlist扫描",
-            "期权价差",
-            "行情看板",
-            "多空分析",
-            "入场与目标价",
-            "综合分析",
-            "技术分析",
-            "多股对比",
-            "自选股",
-        ],
-        index=0,
+        PAGE_OPTIONS,
+        key="nav_page",
     )
 
     st.divider()
@@ -181,7 +196,7 @@ with st.sidebar:
         "股票代码",
         key="symbol_box",
         placeholder="AAPL / NVDA / SPY",
-        help="输入后按 Enter 或点「应用代码」。快速选择仅美股；手动可输其他 Yahoo 代码。",
+        help="输入后按 Enter 或点「应用代码」。快速选择 / 扫描详情会自动打开投资SOP。",
         on_change=_on_symbol_box_change,
     )
     apply_col, tip_col = st.columns([1, 1.2])
@@ -189,10 +204,10 @@ with st.sidebar:
         if st.button("应用代码", use_container_width=True, key="btn_apply_symbol"):
             box = str(st.session_state.get("symbol_box") or "").strip()
             if box:
-                # Box already has the text; only update analysis symbol (no symbol_box write)
                 ns = normalize_symbol(box)
                 if ns:
                     st.session_state.symbol = ns
+                    st.session_state._goto_sop = True
                 st.rerun()
             else:
                 st.warning("请输入代码")
@@ -210,11 +225,11 @@ with st.sidebar:
 
     st.divider()
     st.markdown("**快速选择（美股）**")
+    st.caption("点击后自动打开该股「投资SOP」")
     cols = st.columns(2)
     for i, s in enumerate(st.session_state.watchlist[:12]):
         if cols[i % 2].button(s, key=f"quick_{s}", use_container_width=True):
-            # Defer symbol_box update to next run (before widget)
-            _request_symbol(s)
+            _request_symbol(s, open_sop=True)
             st.rerun()
 
     st.divider()

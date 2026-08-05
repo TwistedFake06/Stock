@@ -430,13 +430,12 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                 if row.get("失效"):
                     st.caption(f"失效：{row['失效']}")
                 if st.button(f"開投资SOP詳情 · {row['代码']}", key=f"goto_{row['代码']}"):
-                    st.session_state.symbol = row["代码"]
-                    if "symbol_box" not in st.session_state:
-                        st.session_state.symbol_box = row["代码"]
-                    else:
-                        # defer box sync (widget may already exist)
-                        st.session_state._pending_symbol = row["代码"]
-                    st.info(f"已選 `{row['代码']}` → 側欄切去「投资SOP」睇完整卡。")
+                    # 下一轮 app 开头处理：换代码 + 自动打开投资SOP（勿在此改 nav_page，widget 已创建）
+                    sym = str(row["代码"])
+                    st.session_state.symbol = sym
+                    st.session_state._pending_symbol = sym
+                    st.session_state._goto_sop = True
+                    st.rerun()
 
     with st.expander("完整結果表（含回避/观望 · 含板塊/量能/IV）", expanded=False):
         drop_cols = ["立刻动作", "失效", "板块说明", "量能说明", "IV说明"]
