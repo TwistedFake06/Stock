@@ -25,6 +25,7 @@ from extra_analysis import (
     build_scorecard,
     default_benchmark,
 )
+from edge_signals import edge_bundle
 from free_data import (
     analyze_liquidity,
     extract_quality_extras,
@@ -44,6 +45,27 @@ from stock_service import (
     normalize_symbol,
 )
 from trade_plan import analyze_events, calc_position, suggest_lot_size
+
+
+@dataclass
+class SwingHorizonPlan:
+    """短线波段单周期计划：0–2周 或 2–4周。"""
+
+    key: str  # h1 | h2
+    label: str  # 0–2周 | 2–4周
+    bars: int  # 交易日路径窗口
+    verdict: str  # 可以入場 | 可以試倉 | 暫緩觀望 | 不做多
+    win_rate_pct: float | None
+    entry_low: float | None
+    entry_high: float | None
+    entry_plan: float | None
+    stop_loss: float | None
+    target: float | None
+    rr: float | None
+    expectancy_r: float | None
+    risk_per_share: float | None
+    reward_per_share: float | None
+    note: str = ""
 
 
 @dataclass
@@ -71,6 +93,11 @@ class TradeSOP:
     rr_t1: float | None
     position_shares: int
     position_note: str
+
+    # 短线波段双周期（主展示）
+    swing_h1: SwingHorizonPlan | None = None  # 0–2周
+    swing_h2: SwingHorizonPlan | None = None  # 2–4周
+    trend_note: str = ""  # 走势一句话
 
     # What to do now
     actions_now: list[str] = field(default_factory=list)
@@ -104,6 +131,25 @@ class TradeSOP:
     news_summary: str = ""
     data_sources: list[str] = field(default_factory=list)
     scorecard_bullets: list[str] = field(default_factory=list)
+    # Edge signals (sector RS / volume / IV)
+    sector_rs_summary: str = ""
+    sector_rs_score: float | None = None
+    sector_rs_label: str = "—"
+    volume_confirm_summary: str = ""
+    volume_confirm_score: float | None = None
+    volume_confirm_label: str = "—"
+    iv_summary: str = ""
+    iv_score: float | None = None
+    iv_label: str = "—"
+    iv_high_event: bool = False
+    false_break_summary: str = ""
+    false_break_score: float | None = None
+    false_break_label: str = "—"
+    false_break_risk: bool = False
+    trend_align_summary: str = ""
+    trend_align_score: float | None = None
+    trend_align_label: str = "—"
+    against_trend: bool = False
 
 
 def _path_win_rate(
@@ -198,6 +244,184 @@ def _expectancy_r(win_rate_pct: float | None, rr: float | None) -> float | None:
     return round(p * float(rr) - (1.0 - p) * 1.0, 3)
 
 
+def _swing_verdict(
+    *,
+    entry_opp: str,
+    bias_label: str,
+    bias_score: float,
+    wr: float | None,
+    rr: float | None,
+    exp_r: float | None,
+    price_far_chase: bool,
+    vol_label: str = "",
+    false_break_risk: bool = False,
+    block_breakout_chase: bool = False,
+    against_trend: bool = False,
+    trend_label: str = "",
+    trend_score: float | None = None,
+) -> str:
+    """
+    短线波段结论（偏操作、仍挡明显亏钱结构）:
+      可以入場 | 可以試倉 | 暫緩觀望 | 不做多
+    """
+    if entry_opp == "偏空回避" or "强烈看空" in bias_label:
+        return "不做多"
+    if "看空" in bias_label and bias_score <= -25:
+        return "不做多"
+    if price_far_chase or entry_opp == "不宜追高":
+        return "暫緩觀望"
+    if vol_label == "放量下跌":
+        return "暫緩觀望"
+    # 假突破：禁止追多；明显失败则暂缓
+    if false_break_risk:
+        return "暫緩觀望"
+    if block_breakout_chase and price_far_chase:
+        return "暫緩觀望"
+    # 逆势（大盘/板块空、个股硬多）→ 不做满仓，最多暂缓
+    if against_trend and trend_label == "逆势":
+        return "暫緩觀望"
+    # 赔率太差：短线也难赚
+    if rr is not None and rr < 0.95:
+        return "暫緩觀望"
+    if exp_r is not None and exp_r < -0.08:
+        return "暫緩觀望"
+
+    good_setup = entry_opp in ("较佳入场", "可关注")
+    ok_bias = bias_score >= -8 and "强烈看空" not in bias_label
+    wr_ok = wr is None or wr >= 50
+    wr_good = wr is None or wr >= 55
+    rr_ok = rr is None or rr >= 1.05
+    rr_good = rr is not None and rr >= 1.25
+    exp_ok = exp_r is None or exp_r >= 0.0
+    exp_good = exp_r is not None and exp_r >= 0.10
+    trend_ok = trend_score is None or trend_score >= 48
+    trend_good = trend_score is None or trend_score >= 60
+    no_fbo = not false_break_risk and not (
+        block_breakout_chase and entry_opp == "不宜追高"
+    )
+
+    if (
+        good_setup
+        and ok_bias
+        and wr_good
+        and rr_good
+        and exp_good
+        and not price_far_chase
+        and not against_trend
+        and trend_good
+        and no_fbo
+        and not block_breakout_chase  # 满仓不要在「仅待确认突破」时追
+    ):
+        return "可以入場"
+    if ok_bias and wr_ok and rr_ok and exp_ok and entry_opp not in ("偏空回避",):
+        if against_trend:
+            return "暫緩觀望"
+        if block_breakout_chase and not good_setup:
+            # 突破未确认：只允许在入场区内试仓，由 price_far_chase 另挡
+            pass
+        if (good_setup or bias_score >= 10) and trend_ok and not false_break_risk:
+            return "可以試倉"
+        if entry_opp in ("观望",) and bias_score >= 18 and trend_ok:
+            return "可以試倉"
+    return "暫緩觀望"
+
+
+def _build_swing_plan(
+    *,
+    key: str,
+    label: str,
+    bars: int,
+    close: pd.Series,
+    entry_low: float | None,
+    entry_high: float | None,
+    entry_mid: float | None,
+    display_limit: float | None,
+    stop: float | None,
+    target: float | None,
+    entry_opp: str,
+    bias_label: str,
+    bias_score: float,
+    price_far_chase: bool,
+    vol_label: str,
+    false_break_risk: bool = False,
+    block_breakout_chase: bool = False,
+    against_trend: bool = False,
+    trend_label: str = "",
+    trend_score: float | None = None,
+) -> SwingHorizonPlan:
+    risk_ps = None
+    reward_ps = None
+    mid = entry_mid
+    if mid is not None and stop is not None and mid > stop:
+        risk_ps = float(mid) - float(stop)
+    if mid is not None and target is not None and target > mid:
+        reward_ps = float(target) - float(mid)
+    rr = None
+    if risk_ps and reward_ps and risk_ps > 0:
+        rr = reward_ps / risk_ps
+    wr = None
+    if risk_ps and reward_ps and close is not None and len(close) > bars + 30:
+        wr = _path_win_rate(
+            close, risk_ps, reward_ps, lookback=100, horizon=bars
+        )
+    exp_r = _expectancy_r(wr, rr)
+    verdict = _swing_verdict(
+        entry_opp=entry_opp,
+        bias_label=bias_label,
+        bias_score=bias_score,
+        wr=wr,
+        rr=rr,
+        exp_r=exp_r,
+        price_far_chase=price_far_chase,
+        vol_label=vol_label,
+        false_break_risk=false_break_risk,
+        block_breakout_chase=block_breakout_chase,
+        against_trend=against_trend,
+        trend_label=trend_label,
+        trend_score=trend_score,
+    )
+    note_bits = []
+    if wr is not None:
+        note_bits.append(f"历史路径约{bars}个交易日内先到目标再触止蚀的比例")
+    if rr is not None:
+        note_bits.append(f"R:R≈{rr:.2f}")
+    if exp_r is not None:
+        note_bits.append(f"E[R]≈{exp_r:+.2f}")
+    return SwingHorizonPlan(
+        key=key,
+        label=label,
+        bars=bars,
+        verdict=verdict,
+        win_rate_pct=round(wr, 1) if wr is not None else None,
+        entry_low=round(float(entry_low), 4) if entry_low else None,
+        entry_high=round(float(entry_high), 4) if entry_high else None,
+        entry_plan=round(float(display_limit), 4)
+        if display_limit
+        else (round(float(mid), 4) if mid else None),
+        stop_loss=round(float(stop), 4) if stop else None,
+        target=round(float(target), 4) if target else None,
+        rr=round(rr, 2) if rr is not None else None,
+        expectancy_r=exp_r,
+        risk_per_share=round(risk_ps, 4) if risk_ps else None,
+        reward_per_share=round(reward_ps, 4) if reward_ps else None,
+        note=" · ".join(note_bits),
+    )
+
+
+# ---- Profit-focused hard floors (raise only if you accept worse expectancy) ----
+# 适合入场：赔率+期望值都要过线，避免「高胜率低赔率」假好票
+MIN_RR_FULL = 1.35
+MIN_RR_CAUTIOUS = 1.05
+MIN_EXP_FULL = 0.12
+MIN_EXP_CAUTIOUS = 0.0
+MIN_WR_FULL = 52.0
+MIN_STAB_FULL = 48.0
+MIN_STAB_CAUTIOUS = 30.0
+MIN_REGIME_FULL = 48.0
+MIN_LIQ_FULL = 42.0
+MIN_RS_FULL = 42.0
+
+
 def _enter_decision(
     entry_opp: str,
     entry_score: float,
@@ -214,8 +438,20 @@ def _enter_decision(
     earnings_soon: bool = False,
     chase_high: bool = False,
     multi_rs_score: float | None = None,
+    price_above_zone: bool = False,
+    price_far_chase: bool = False,
+    sector_rs_score: float | None = None,
+    volume_confirm_score: float | None = None,
+    iv_score: float | None = None,
+    iv_high_event: bool = False,
 ) -> tuple[str, float, str]:
-    """Map models → 适合入场 / 谨慎试仓 / 观望 / 回避 + score."""
+    """
+    Map models → 适合入场 / 谨慎试仓 / 观望 / 回避.
+
+    Soft score is for ranking; **hard gates** protect expectancy:
+    bad R:R / negative E[R] / chase / earnings / thin liquidity cannot full-size.
+    Edge: sector RS, volume confirm, IV event risk.
+    """
     s = 38.0 + entry_score * 0.32
     if entry_opp in ("较佳入场",):
         s += 16
@@ -240,16 +476,19 @@ def _enter_decision(
         s += (win_rate - 50) * 0.18
     if rr is not None:
         if rr >= 2.0:
-            s += 8
-        elif rr >= 1.2:
-            s += 3
+            s += 10
+        elif rr >= 1.35:
+            s += 6
+        elif rr >= 1.05:
+            s += 2
+        elif rr < 1.0:
+            s -= 14  # 赔率不足，强烈减分
         elif rr < 0.8:
-            s -= 10
+            s -= 18
 
     if risk_level in ("高", "极高"):
         s -= 8
 
-    # Market regime (VIX / SPY structure) — real gate for new risk
     if regime_score is not None:
         s += (float(regime_score) - 50.0) * 0.22
         if regime_score < 35:
@@ -259,50 +498,125 @@ def _enter_decision(
         if liquidity_score < 35:
             s -= 10
     if multi_rs_score is not None:
-        s += (float(multi_rs_score) - 50.0) * 0.08
+        s += (float(multi_rs_score) - 50.0) * 0.10
     if expectancy_r is not None:
         if expectancy_r >= 0.35:
-            s += 8
-        elif expectancy_r >= 0.10:
-            s += 3
-        elif expectancy_r < 0:
-            s -= 12
+            s += 10
+        elif expectancy_r >= 0.12:
+            s += 5
+        elif expectancy_r >= 0:
+            s += 1
+        else:
+            s -= 16  # 负期望：长期必亏结构
     if earnings_soon:
         s -= 14
-    if chase_high:
+    if chase_high or price_above_zone:
+        s -= 10
+    if price_far_chase:
+        s -= 12
+
+    # Edge signals: sector / volume / IV
+    if sector_rs_score is not None:
+        s += (float(sector_rs_score) - 50.0) * 0.12
+        if sector_rs_score < 38:
+            s -= 6
+    if volume_confirm_score is not None:
+        s += (float(volume_confirm_score) - 50.0) * 0.14
+        if volume_confirm_score <= 32:
+            s -= 10  # 放量下跌等
+        elif volume_confirm_score >= 68:
+            s += 4
+    if iv_score is not None:
+        s += (float(iv_score) - 50.0) * 0.08
+    if iv_high_event:
         s -= 8
 
     s = float(max(0.0, min(100.0, s)))
 
-    # Hard gates for long SOP
+    # ---- Absolute blocks (protect capital / expectancy) ----
     if entry_opp in ("偏空回避",) or ("强烈看空" in bias_label and entry_score < 50):
         return "回避", min(s, 35.0), "偏空"
+    if "看空" in bias_label and bias_score <= -18:
+        return "回避", min(s, 38.0), "偏空"
     if liquidity_score is not None and liquidity_score < 28:
         return "观望", min(s, 48.0), "观望"
+    # 赔率不足 1：做多数学期望很难正 → 最多观望
+    if rr is not None and rr < MIN_RR_CAUTIOUS:
+        if s >= 40:
+            return "观望", min(s, 52.0), "观望"
+        return "回避", min(s, 40.0), "观望" if bias_score >= -15 else "偏空"
+    # 负期望：禁止开新多
+    if expectancy_r is not None and expectancy_r < MIN_EXP_CAUTIOUS:
+        if s >= 40:
+            return "观望", min(s, 50.0), "观望"
+        return "回避", min(s, 38.0), "观望"
+    # 远离入场区追高
+    if price_far_chase or entry_opp in ("不宜追高",):
+        if s >= 45:
+            return "观望", min(s, 50.0), "观望"
+        return "回避", min(s, 40.0), "观望"
     if earnings_soon:
-        # Within earnings window: never full "适合入场" (gap risk)
-        if s >= 55:
-            return "谨慎试仓", min(s, 68.0), "做多"
+        # 财报窗口：永不适合入场；期望仍为正才允许极小试仓
+        can_half = (
+            s >= 58
+            and (rr is None or rr >= MIN_RR_CAUTIOUS)
+            and (expectancy_r is None or expectancy_r >= 0.05)
+            and not price_far_chase
+        )
+        if can_half:
+            return "谨慎试仓", min(s, 62.0), "做多"
         if s >= 40:
             return "观望", min(s, 52.0), "观望"
         return "回避", min(s, 40.0), "观望"
     if regime_score is not None and regime_score < 32:
-        if s >= 70 and entry_opp in ("较佳入场",):
-            return "谨慎试仓", min(s, 65.0), "做多"
         if s >= 50:
             return "观望", min(s, 55.0), "观望"
         return "回避", min(s, 40.0), "观望" if bias_score >= -15 else "偏空"
 
-    if (
+    # ---- 适合入场：全部硬条件 ----
+    full_ok = (
         s >= 74
         and entry_opp in ("较佳入场", "可关注")
-        and bias_score >= -10
-        and (expectancy_r is None or expectancy_r >= 0.05)
-        and (regime_score is None or regime_score >= 42)
-    ):
+        and bias_score >= -5
+        and "看空" not in bias_label
+        and (rr is not None and rr >= MIN_RR_FULL)
+        and (expectancy_r is not None and expectancy_r >= MIN_EXP_FULL)
+        and (win_rate is None or win_rate >= MIN_WR_FULL)
+        and stability >= MIN_STAB_FULL
+        and (regime_score is None or regime_score >= MIN_REGIME_FULL)
+        and (liquidity_score is None or liquidity_score >= MIN_LIQ_FULL)
+        and (multi_rs_score is None or multi_rs_score >= MIN_RS_FULL)
+        and (sector_rs_score is None or sector_rs_score >= 42)
+        and (volume_confirm_score is None or volume_confirm_score >= 40)
+        and not iv_high_event
+        and not earnings_soon
+        and not chase_high
+        and not price_above_zone
+        and not price_far_chase
+        and risk_level not in ("极高",)
+    )
+    if full_ok:
         return "适合入场", s, "做多"
-    if s >= 55 and entry_opp not in ("偏空回避", "不宜追高"):
-        return "谨慎试仓", s, "做多"
+
+    # ---- 谨慎试仓：允许稍差，但赔率/期望不能穿底 ----
+    cautious_ok = (
+        s >= 55
+        and entry_opp not in ("偏空回避", "不宜追高")
+        and bias_score >= -12
+        and "强烈看空" not in bias_label
+        and (rr is None or rr >= MIN_RR_CAUTIOUS)
+        and (expectancy_r is None or expectancy_r >= MIN_EXP_CAUTIOUS)
+        and stability >= MIN_STAB_CAUTIOUS
+        and not price_far_chase
+        and (liquidity_score is None or liquidity_score >= 32)
+        and (regime_score is None or regime_score >= 38)
+        and (volume_confirm_score is None or volume_confirm_score >= 28)
+        # 放量下跌禁止试仓
+        and not (volume_confirm_score is not None and volume_confirm_score < 28)
+    )
+    if cautious_ok:
+        return "谨慎试仓", min(s, 72.0) if not full_ok else s, "做多"
+
     if s >= 40:
         return "观望", s, "观望"
     return "回避", s, "观望" if bias_score >= -15 else "偏空"
@@ -443,20 +757,39 @@ def build_trade_sop(
     e_low = entry.suggested_entry_low
     e_high = entry.suggested_entry_high
     stop = entry.stop_loss
-    # Plan entry: mid of zone, or last if inside zone
+    # 评分用「入场区中位」固定 R:R / 期望 / 路径胜率，避免现价每分钟抖动导致可开仓名单乱跳
+    # 展示挂单价：若现价已在区内，可提示用现价限价（但不拿跳动现价重算赔率）
     if e_low and e_high:
-        if e_low <= last <= e_high:
-            entry_plan = round(last, 4)
-        else:
-            entry_plan = round((float(e_low) + float(e_high)) / 2.0, 4)
+        zone_mid = round((float(e_low) + float(e_high)) / 2.0, 4)
+        entry_plan = zone_mid
+        in_zone = float(e_low) <= last <= float(e_high)
+        display_limit = round(last, 4) if in_zone else zone_mid
     else:
-        entry_plan = round(last, 4)
+        zone_mid = round(last, 4)
+        entry_plan = zone_mid
+        display_limit = zone_mid
+        in_zone = True
 
-    t1 = getattr(getattr(targets, "short", None), "bull_target", None)
-    t2 = getattr(getattr(targets, "medium", None), "bull_target", None)
-    if t1 is None:
-        t1 = getattr(getattr(targets, "ultra", None), "bull_target", None)
+    # 现价相对入场区：上方追高会毁掉赔率（用缓冲区，减少边界抖一下就改结论）
+    price_above_zone = False
+    price_far_chase = False
+    if e_high is not None and last > 0:
+        eh = float(e_high)
+        if last > eh * 1.02:  # >2% above zone high
+            price_above_zone = True
+        if last > eh * 1.045:  # >4.5% above zone → 禁止试仓
+            price_far_chase = True
 
+    # 短线目标：0–2周用超短/短期；2–4周用短期/中期
+    t_ultra = getattr(getattr(targets, "ultra", None), "bull_target", None)
+    t_short = getattr(getattr(targets, "short", None), "bull_target", None)
+    t_med = getattr(getattr(targets, "medium", None), "bull_target", None)
+    t1 = t_ultra or t_short  # 0–2周目标
+    t2 = t_short or t_med  # 2–4周目标
+    if t2 is not None and t1 is not None and float(t2) < float(t1):
+        t2 = t_med or t2
+
+    # 结构赔率一律相对 zone mid（稳定）— 默认用 0–2 周目标
     risk_ps = None
     if entry_plan and stop and entry_plan > stop:
         risk_ps = float(entry_plan) - float(stop)
@@ -468,9 +801,23 @@ def build_trade_sop(
     if risk_ps and reward_ps and risk_ps > 0:
         rr = reward_ps / risk_ps
 
+    # 路径用已收盘日线（去掉未完成当日 bar）
+    close_for_path = df["Close"]
+    if len(close_for_path) >= 40:
+        try:
+            from market_session import us_session_clock
+
+            sess = us_session_clock().session
+            if sess in ("pre_market", "rth", "after_hours", "overnight"):
+                close_for_path = close_for_path.iloc[:-1]
+        except Exception:
+            pass
+
     path_wr = None
     if risk_ps and reward_ps:
-        path_wr = _path_win_rate(df["Close"], risk_ps, reward_ps)
+        path_wr = _path_win_rate(
+            close_for_path, risk_ps, reward_ps, lookback=100, horizon=10
+        )
 
     # Blend path WR with daily up-win rate (path more relevant for stops/targets)
     day_wr = getattr(risk, "win_rate_pct", None)
@@ -495,8 +842,82 @@ def build_trade_sop(
 
     exp_r = _expectancy_r(win_rate, rr)
 
+    # Edge: sector RS + volume confirm + IV regime
+    try:
+        edges = edge_bundle(sym, df, info_use, period=period)
+        sector_rs = edges["sector_rs"]
+        vol_cf = edges["volume"]
+        iv_reg = edges["iv"]
+        fbo = edges.get("false_break")
+        trend_al = edges.get("trend_align")
+    except Exception:
+        sector_rs = None
+        vol_cf = None
+        iv_reg = None
+        fbo = None
+        trend_al = None
+
+    vol_label = getattr(vol_cf, "label", "") if vol_cf else ""
+    fbo_risk = bool(getattr(fbo, "false_break_risk", False)) if fbo else False
+    fbo_block = bool(getattr(fbo, "block_breakout_chase", False)) if fbo else False
+    against_tr = bool(getattr(trend_al, "against_trend", False)) if trend_al else False
+    trend_lab = getattr(trend_al, "label", "") if trend_al else ""
+    trend_sc = getattr(trend_al, "score", None) if trend_al else None
+
+    # 双周期短线计划（主输出）
+    swing_h1 = _build_swing_plan(
+        key="h1",
+        label="0–2周",
+        bars=10,
+        close=close_for_path,
+        entry_low=e_low,
+        entry_high=e_high,
+        entry_mid=entry_plan,
+        display_limit=display_limit,
+        stop=stop,
+        target=t1,
+        entry_opp=entry.opportunity,
+        bias_label=bias.bias,
+        bias_score=bias.score,
+        price_far_chase=price_far_chase,
+        vol_label=vol_label,
+        false_break_risk=fbo_risk,
+        block_breakout_chase=fbo_block,
+        against_trend=against_tr,
+        trend_label=trend_lab,
+        trend_score=trend_sc,
+    )
+    swing_h2 = _build_swing_plan(
+        key="h2",
+        label="2–4周",
+        bars=20,
+        close=close_for_path,
+        entry_low=e_low,
+        entry_high=e_high,
+        entry_mid=entry_plan,
+        display_limit=display_limit,
+        stop=stop,
+        target=t2,
+        entry_opp=entry.opportunity,
+        bias_label=bias.bias,
+        bias_score=bias.score,
+        price_far_chase=price_far_chase,
+        vol_label=vol_label,
+        false_break_risk=fbo_risk,
+        block_breakout_chase=fbo_block,
+        against_trend=against_tr,
+        trend_label=trend_lab,
+        trend_score=trend_sc,
+    )
+    trend_note = (
+        f"走势：{bias.bias}（{bias.score:+.0f}）· 入场结构 {entry.opportunity}· "
+        f"量能 {vol_label or '—'}· 跟势 {trend_lab or '—'}· "
+        f"假突破 {getattr(fbo, 'label', '—') if fbo else '—'}"
+    )
+
     stab, stab_label = _stability_score(risk, trend, bias.score)
-    enter_ok, enter_score, side = _enter_decision(
+    # 综合风控分仍计算；最终「做不做」以短线 0–2 周波段结论为准（你的持仓周期）
+    _, enter_score, _ = _enter_decision(
         entry.opportunity,
         entry.score,
         bias.bias,
@@ -511,15 +932,45 @@ def build_trade_sop(
         earnings_soon=earnings_soon,
         chase_high=chase_high,
         multi_rs_score=multi_rs.get("score"),
+        price_above_zone=price_above_zone,
+        price_far_chase=price_far_chase,
+        sector_rs_score=getattr(sector_rs, "score", None) if sector_rs else None,
+        volume_confirm_score=getattr(vol_cf, "score", None) if vol_cf else None,
+        iv_score=getattr(iv_reg, "score", None) if iv_reg else None,
+        iv_high_event=bool(getattr(iv_reg, "high_event_risk", False)) if iv_reg else False,
     )
+    _map_ok = {
+        "可以入場": ("适合入场", "做多"),
+        "可以試倉": ("谨慎试仓", "做多"),
+        "暫緩觀望": ("观望", "观望"),
+        "不做多": ("回避", "偏空"),
+    }
+    enter_ok, side = _map_ok.get(swing_h1.verdict, ("观望", "观望"))
+    # 分数：用波段可操作性映射，方便扫描排序
+    enter_score = {
+        "适合入场": max(enter_score, 78.0),
+        "谨慎试仓": max(min(enter_score, 72.0), 58.0),
+        "观望": min(enter_score, 52.0),
+        "回避": min(enter_score, 35.0),
+    }.get(enter_ok, enter_score)
 
-    # Position
+    # Position: 谨慎试仓强制 0.5R；观望/回避仍给「若强行」参考仓但标注
     lot = suggest_lot_size(sym)
-    plan_entry = float(entry_plan or last)
+    # 仓位按结构中位；若已在区内可用 display_limit 作为更贴近的限价参考
+    plan_entry = float(display_limit if in_zone else (entry_plan or last))
     plan_stop = float(stop or last * 0.97)
+    if enter_ok == "适合入场":
+        eff_risk_pct = float(risk_pct)
+        risk_tag = "1R"
+    elif enter_ok == "谨慎试仓":
+        eff_risk_pct = float(risk_pct) * 0.5
+        risk_tag = "0.5R"
+    else:
+        eff_risk_pct = float(risk_pct)
+        risk_tag = "参考1R(SOP不建议开)"
     pos = calc_position(
         capital=capital,
-        risk_pct=risk_pct,
+        risk_pct=eff_risk_pct,
         entry_price=plan_entry,
         stop_price=plan_stop,
         short_target=float(t1) if t1 else None,
@@ -533,9 +984,11 @@ def build_trade_sop(
         pos_note = "；".join(pos.notes) if pos.notes else "风险预算不足 1 股"
     else:
         pos_note = (
-            f"约 {pos.shares} 股 · 仓位市值 ${pos.position_value:,.0f} "
+            f"{risk_tag} · 约 {pos.shares} 股 · 仓位市值 ${pos.position_value:,.0f} "
             f"· 占本金 {pos.position_pct_of_capital:.1f}%（本金按 HKD→USD 折算）"
         )
+        if enter_ok == "谨慎试仓":
+            pos_note += " · 半仓试错，到 T1 先减半"
 
     # Checklist
     checklist: list[dict[str, str]] = []
@@ -580,8 +1033,24 @@ def build_trade_sop(
         checklist.append(
             {
                 "name": "盈亏比 R:R",
-                "status": "pass" if rr >= 1.5 else ("warn" if rr >= 1.0 else "fail"),
-                "detail": f"T1 R:R ≈ {rr:.2f}",
+                "status": "pass"
+                if rr >= MIN_RR_FULL
+                else ("warn" if rr >= MIN_RR_CAUTIOUS else "fail"),
+                "detail": (
+                    f"T1 R:R ≈ {rr:.2f} · 满仓需≥{MIN_RR_FULL} · 试仓需≥{MIN_RR_CAUTIOUS}"
+                    + (" · 不足则禁止开多" if rr < MIN_RR_CAUTIOUS else "")
+                ),
+            }
+        )
+    if price_above_zone or price_far_chase:
+        checklist.append(
+            {
+                "name": "价格 vs 入场区",
+                "status": "fail" if price_far_chase else "warn",
+                "detail": (
+                    "现价明显高于入场区上沿：追高会压缩赔率"
+                    + (" · 已禁止试仓" if price_far_chase else " · 不得满仓")
+                ),
             }
         )
     if events is not None and getattr(events, "caution", None):
@@ -634,6 +1103,61 @@ def build_trade_sop(
                 "detail": multi_rs.get("summary", ""),
             }
         )
+    if sector_rs is not None and getattr(sector_rs, "available", False):
+        sc = sector_rs.score
+        checklist.append(
+            {
+                "name": "板块相对强弱",
+                "status": "pass"
+                if sc is not None and sc >= 58
+                else ("warn" if sc is not None and sc >= 42 else "fail"),
+                "detail": sector_rs.summary,
+            }
+        )
+    if vol_cf is not None and getattr(vol_cf, "available", False):
+        checklist.append(
+            {
+                "name": "量能确认",
+                "status": "pass"
+                if vol_cf.score >= 62
+                else ("warn" if vol_cf.score >= 40 else "fail"),
+                "detail": vol_cf.summary,
+            }
+        )
+    if iv_reg is not None and getattr(iv_reg, "available", False):
+        checklist.append(
+            {
+                "name": "IV 环境",
+                "status": "fail"
+                if iv_reg.high_event_risk
+                else ("pass" if iv_reg.score >= 55 else "warn"),
+                "detail": iv_reg.summary,
+            }
+        )
+    if fbo is not None and getattr(fbo, "available", False):
+        checklist.append(
+            {
+                "name": "假突破过滤",
+                "status": "fail"
+                if fbo.false_break_risk
+                else (
+                    "warn"
+                    if fbo.block_breakout_chase
+                    else ("pass" if fbo.score >= 60 else "warn")
+                ),
+                "detail": fbo.summary,
+            }
+        )
+    if trend_al is not None and getattr(trend_al, "available", False):
+        checklist.append(
+            {
+                "name": "跟势(SPY/板块)",
+                "status": "fail"
+                if trend_al.against_trend
+                else ("pass" if trend_al.score >= 60 else "warn"),
+                "detail": trend_al.summary,
+            }
+        )
 
     # Actions
     actions_now: list[str] = []
@@ -641,52 +1165,78 @@ def build_trade_sop(
 
     if enter_ok == "适合入场":
         actions_now.append(
-            f"限价买入区 {e_low:.2f}–{e_high:.2f}"
+            f"限价只在 {e_low:.2f}–{e_high:.2f} 成交"
             if e_low and e_high
-            else f"参考价附近挂单 ≈ {entry_plan:.2f}"
+            else f"参考限价 ≈ {entry_plan:.2f}（勿市价追）"
         )
         if pos.shares > 0:
-            actions_now.append(f"按 1R={risk_pct:.1f}% 下单约 {pos.shares} 股（本金 {capital:,.0f}）")
+            actions_now.append(
+                f"按 1R={risk_pct:.1f}% 下单约 {pos.shares} 股（本金 USD {capital:,.0f}）"
+            )
         else:
             actions_now.append("先调本金/风险% 或收紧止损，使股数 ≥ 1")
-        actions_now.append(f"止损设在 {stop:.2f}" if stop else "设定止损")
+        actions_now.append(f"止损硬挂 {stop:.2f}" if stop else "必须先设止损")
         if t1:
-            actions_now.append(f"T1 目标 {t1:.2f}（到则减仓 50% 或移动止损）")
+            actions_now.append(f"T1={t1:.2f}：到价减仓 ≥50%，把止损移到成本附近")
         if t2:
-            actions_now.append(f"T2 目标 {t2:.2f}（趋势持有）")
-        actions_now.append("成交后写交易日志：理由 / 止损 / 目标")
+            actions_now.append(f"剩余仓位看 T2={t2:.2f}；结构破坏则清")
+        if exp_r is not None and rr is not None:
+            actions_now.append(f"本结构期望约 {exp_r:+.2f}R · R:R {rr:.2f}（符合满仓门槛）")
+        actions_now.append("成交后写日志：理由 / 止损 / 目标 / 是否按计划")
     elif enter_ok == "谨慎试仓":
-        half = max(1, pos.shares // 2) if pos.shares > 0 else 0
         actions_now.append(
-            f"最多 0.5R（约 {half} 股）" if half else "最多半仓或 0.5R（不是满 1R）"
+            f"只用 0.5R（约 {pos.shares} 股）" if pos.shares > 0 else "0.5R 预算不足 1 股：缩小止损距或加本金"
         )
         if e_low and e_high:
-            actions_now.append(f"只在 {e_low:.2f}–{e_high:.2f} 回踩挂限价，不追高")
+            actions_now.append(f"限价只挂 {e_low:.2f}–{e_high:.2f}，上方绝不追")
         actions_now.append(f"止损 {stop:.2f} 必须预设" if stop else "先定止损再考虑")
+        if exp_r is not None and rr is not None:
+            actions_now.append(f"期望 {exp_r:+.2f}R · R:R {rr:.2f}（未达满仓线，故半仓）")
         if earnings_soon:
-            actions_now.append("临近财报：减小仓位或等财报后再做")
-        if regime is not None and regime.score < 45:
-            actions_now.append("大盘环境偏弱：优先高流动性标的 + 更紧风控")
-        actions_wait.append("若跌破止损或机会评级变「回避」→ 立刻停手")
-        actions_wait.append("等方向更清晰或稳定度回升再加仓")
+            actions_now.append("临近财报：半仓已是上限，隔夜风险自负")
+        actions_wait.append("跌破止损或变「回避」→ 立刻停手，不加仓摊平")
+        actions_wait.append("只有回到入场区且评分升到「适合」才考虑加到 1R")
     elif enter_ok == "观望":
-        actions_now.append("今天不开新仓")
-        if e_low:
-            actions_wait.append(f"价格进入 {e_low:.2f}–{e_high:.2f} 且多空转正再评估")
+        actions_now.append("今天不开新仓（赔率/期望/位置未过赚钱门槛）")
+        if rr is not None and rr < MIN_RR_CAUTIOUS:
+            actions_wait.append(
+                f"等更好买点把 R:R 做到 ≥{MIN_RR_CAUTIOUS}（现约 {rr:.2f}）"
+            )
+        if exp_r is not None and exp_r < 0:
+            actions_wait.append(f"现期望 {exp_r:+.2f}R 为负：禁止用「感觉」开仓")
+        if e_low and e_high:
+            actions_wait.append(f"价格回到 {e_low:.2f}–{e_high:.2f} 再评估")
         if regime is not None and regime.score < 40:
-            actions_wait.append("等待 VIX 回落或 SPY 重回均线上方再开多")
-        actions_wait.append("继续观察量价 / 均线结构，不预判抄底")
+            actions_wait.append("等待大盘环境改善（VIX/SPY 结构）")
+        actions_wait.append("不预判抄底、不追已经离开入场区的票")
     else:
-        actions_now.append("回避做多；不加仓")
-        actions_now.append("已有多单：检查是否触及止损 / 考虑减仓")
-        actions_wait.append("等待空头结构结束、入场评级改善后再做多")
+        actions_now.append("回避做多；不加仓、不摊平")
+        actions_now.append("已有多单：优先检查止损是否仍有效 / 考虑减仓")
+        actions_wait.append("等空头结构结束且 R:R/期望重新过线后再做多")
 
     if vol and getattr(vol, "trend", "") == "放量" and bias.score < 0:
         actions_wait.append("放量偏空：避免在恐慌杀跌中接刀")
-    if chase_high:
-        actions_wait.append("靠近 52 周高位：等回踩入场区，避免 FOMO 追高")
+    if chase_high or price_above_zone:
+        actions_wait.append("靠近高位/在入场区上方：等回踩，FOMO 是亏钱主因之一")
     if liq.score < 40:
-        actions_now.append("流动性偏弱：减小单笔、用限价、避免市价扫单")
+        actions_now.append("流动性偏弱：限价、减小单笔、避免市价扫单")
+    if vol_cf is not None and vol_cf.label == "放量下跌":
+        actions_now.append("放量下跌：今天不做多，等抛压缓和")
+    if vol_cf is not None and vol_cf.label == "缩量回踩" and enter_ok in ("适合入场", "谨慎试仓"):
+        actions_now.append("缩量回踩：优先限价等回踩区成交，不追阳线")
+    if sector_rs is not None and sector_rs.score is not None and sector_rs.score < 40:
+        actions_wait.append("弱于板块：优先换同板块强势股，或等个股重夺板块相对强度")
+    if iv_reg is not None and iv_reg.high_event_risk:
+        actions_now.append("IV 偏高/极高：减仓或等波动回落，警惕事件跳空")
+    if fbo is not None and fbo.false_break_risk:
+        actions_now.append("假突破信号：今天不追多，等回到入场区再评估")
+    elif fbo is not None and fbo.block_breakout_chase:
+        actions_wait.append("突破未确认：禁止追高，只允许回踩入场区限价")
+    if trend_al is not None and trend_al.against_trend:
+        actions_now.append("逆势（大盘/板块偏空）：短线优先空手，不做逆势追多")
+    elif trend_al is not None and trend_al.label in ("强跟势", "跟势"):
+        if enter_ok in ("适合入场", "谨慎试仓"):
+            actions_now.append("跟势环境OK：顺大盘/板块方向在区内做多更稳")
 
     invalidation = entry.invalidation or (
         f"收盘跌破止损 {stop:.2f} 则本计划作废" if stop else "结构破坏则作废"
@@ -696,23 +1246,34 @@ def build_trade_sop(
     if regime is not None:
         reg_bit = f"市场 {regime.label}（{regime.score:.0f}）；"
     exp_bit = f"期望 {exp_r:+.2f}R；" if exp_r is not None else ""
-    if win_rate is not None:
-        summary = (
-            f"{sym} 现价 {last:.2f} → **{enter_ok}**（{enter_score:.0f}分）。"
-            f"{reg_bit}方向 {bias.bias}；入场 {entry.opportunity}；"
-            f"路径胜率约 {win_rate:.0f}%（{wr_label}）；{exp_bit}稳定度 {stab_label}。"
+    # 以短线波段语言写摘要（主周期 0–2 周）
+    h1v = swing_h1.verdict
+    h2v = swing_h2.verdict
+    summary = (
+        f"{sym} 现价 **{last:.2f}** · {trend_note}。\n\n"
+        f"**0–2周** → {h1v}"
+        + (
+            f"：入场 {swing_h1.entry_low}–{swing_h1.entry_high}，"
+            f"止蚀 {swing_h1.stop_loss}，目标 {swing_h1.target}，"
+            f"胜率约 {swing_h1.win_rate_pct}%"
+            if swing_h1.win_rate_pct is not None
+            else ""
         )
-    else:
-        summary = (
-            f"{sym} 现价 {last:.2f} → **{enter_ok}**（{enter_score:.0f}分）。"
-            f"{reg_bit}方向 {bias.bias}；入场 {entry.opportunity}；稳定度 {stab_label}。"
+        + f"；**2–4周** → {h2v}"
+        + (
+            f"：目标 {swing_h2.target}，胜率约 {swing_h2.win_rate_pct}%"
+            if swing_h2.win_rate_pct is not None
+            else ""
         )
+        + f"。{reg_bit}"
+    )
 
     notes = [
-        "胜率=历史路径模拟（先触 T1 再触止损），非未来保证",
-        "期望值 E[R]=胜率×盈亏比 − (1−胜率)×1R，用于比较「值不值得做」",
-        "稳定度综合波动、回撤、夏普、趋势强度",
-        "综合分权重：技术22/基本面22/风险18/多周期RS15/市场环境13/流动性10",
+        "短线波段：0–2周≈10个交易日路径；2–4周≈20个交易日路径",
+        "胜率=历史：同距离止蚀/目标，先到目标算赢（非实盘保证）",
+        "入場价=结构区限价；止蚀=结构/ATR 止损；目标=波动+阻力外推",
+        "R:R 与 E[R] 按入场区中位计算，减少盘中乱跳",
+        "可以入場/試倉仍建议限价，不追离场区过远的价",
         f"区间报酬 {rets.get('total_return_pct'):.1f}%，年化波动 {rets.get('volatility_pct'):.1f}%"
         if rets.get("total_return_pct") is not None and rets.get("volatility_pct") is not None
         else "数据仅供实盘辅助",
@@ -740,7 +1301,7 @@ def build_trade_sop(
         enter_score=round(enter_score, 1),
         entry_low=round(float(e_low), 4) if e_low else None,
         entry_high=round(float(e_high), 4) if e_high else None,
-        entry_plan=entry_plan,
+        entry_plan=display_limit,  # 区内用现价作限价参考；R:R 仍按区中位算
         stop_loss=round(float(stop), 4) if stop else None,
         target_t1=round(float(t1), 4) if t1 else None,
         target_t2=round(float(t2), 4) if t2 else None,
@@ -780,4 +1341,25 @@ def build_trade_sop(
         news_summary=getattr(news, "summary", "") if news else "",
         data_sources=data_sources,
         scorecard_bullets=list(card.bullets or []),
+        sector_rs_summary=getattr(sector_rs, "summary", "") if sector_rs else "",
+        sector_rs_score=getattr(sector_rs, "score", None) if sector_rs else None,
+        sector_rs_label=getattr(sector_rs, "label", "—") if sector_rs else "—",
+        volume_confirm_summary=getattr(vol_cf, "summary", "") if vol_cf else "",
+        volume_confirm_score=getattr(vol_cf, "score", None) if vol_cf else None,
+        volume_confirm_label=getattr(vol_cf, "label", "—") if vol_cf else "—",
+        iv_summary=getattr(iv_reg, "summary", "") if iv_reg else "",
+        iv_score=getattr(iv_reg, "score", None) if iv_reg else None,
+        iv_label=getattr(iv_reg, "label", "—") if iv_reg else "—",
+        iv_high_event=bool(getattr(iv_reg, "high_event_risk", False)) if iv_reg else False,
+        swing_h1=swing_h1,
+        swing_h2=swing_h2,
+        trend_note=trend_note,
+        false_break_summary=getattr(fbo, "summary", "") if fbo else "",
+        false_break_score=getattr(fbo, "score", None) if fbo else None,
+        false_break_label=getattr(fbo, "label", "—") if fbo else "—",
+        false_break_risk=bool(getattr(fbo, "false_break_risk", False)) if fbo else False,
+        trend_align_summary=getattr(trend_al, "summary", "") if trend_al else "",
+        trend_align_score=getattr(trend_al, "score", None) if trend_al else None,
+        trend_align_label=getattr(trend_al, "label", "—") if trend_al else "—",
+        against_trend=bool(getattr(trend_al, "against_trend", False)) if trend_al else False,
     )

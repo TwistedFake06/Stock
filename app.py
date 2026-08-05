@@ -109,14 +109,49 @@ inject_mobile_css()
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = load_watchlist()
 else:
-    # Drop non-US from quick-select / saved list
+    # Drop non-US from quick-select / saved list only (manual symbol stays free)
     st.session_state.watchlist = filter_us_only(list(st.session_state.watchlist))
-if "symbol" not in st.session_state:
+
+if "symbol" not in st.session_state or not str(st.session_state.symbol).strip():
     st.session_state.symbol = st.session_state.watchlist[0]
-else:
-    # If current symbol is non-US, snap to first US watch item
-    if not is_us_symbol(str(st.session_state.symbol)):
-        st.session_state.symbol = st.session_state.watchlist[0]
+
+
+def _on_symbol_box_change() -> None:
+    """Commit analysis symbol when the text box value changes (Enter / blur).
+
+    Do NOT write back to ``symbol_box`` here — Streamlit forbids mutating a
+    widget's own key after it is bound (and on_change is still that key).
+    """
+    raw = str(st.session_state.get("symbol_box") or "").strip()
+    ns = normalize_symbol(raw)
+    if ns:
+        st.session_state.symbol = ns
+
+
+def _request_symbol(raw: str) -> None:
+    """
+    Queue a symbol change for the *next* run (before text_input is created).
+
+    After a widget with key=symbol_box exists, we must not assign
+    session_state.symbol_box in the same run — use _pending_symbol instead.
+    """
+    ns = normalize_symbol(str(raw or "").strip())
+    if not ns:
+        return
+    st.session_state.symbol = ns
+    st.session_state._pending_symbol = ns
+
+
+# Apply pending symbol → input box BEFORE the widget is instantiated
+if "_pending_symbol" in st.session_state:
+    _ps = normalize_symbol(str(st.session_state.pop("_pending_symbol") or ""))
+    if _ps:
+        st.session_state.symbol = _ps
+        st.session_state.symbol_box = _ps
+
+# Seed text box once (only when key does not exist yet)
+if "symbol_box" not in st.session_state:
+    st.session_state.symbol_box = str(st.session_state.symbol)
 
 # ---- sidebar ----
 with st.sidebar:
@@ -141,14 +176,32 @@ with st.sidebar:
     )
 
     st.divider()
-    symbol_input = st.text_input(
+    # key= only — never pass value= (avoids wiping typed text on rerun)
+    st.text_input(
         "股票代码",
-        value=st.session_state.symbol,
+        key="symbol_box",
         placeholder="AAPL / NVDA / SPY",
-        help="快速选择仅美股；手动可输入其他 Yahoo 代码",
+        help="输入后按 Enter 或点「应用代码」。快速选择仅美股；手动可输其他 Yahoo 代码。",
+        on_change=_on_symbol_box_change,
     )
-    if symbol_input:
-        st.session_state.symbol = normalize_symbol(symbol_input)
+    apply_col, tip_col = st.columns([1, 1.2])
+    with apply_col:
+        if st.button("应用代码", use_container_width=True, key="btn_apply_symbol"):
+            box = str(st.session_state.get("symbol_box") or "").strip()
+            if box:
+                # Box already has the text; only update analysis symbol (no symbol_box write)
+                ns = normalize_symbol(box)
+                if ns:
+                    st.session_state.symbol = ns
+                st.rerun()
+            else:
+                st.warning("请输入代码")
+    with tip_col:
+        cur = str(st.session_state.get("symbol") or "")
+        if cur and not is_us_symbol(cur):
+            st.caption(f"当前 `{cur}` 非美股（分析可用；快速自选仍只美股）")
+        else:
+            st.caption(f"当前分析：`{cur or '—'}`")
 
     period_label = st.selectbox("时间范围", list(PERIOD_MAP.keys()), index=3)
     interval_label = st.selectbox("K线周期", list(INTERVAL_MAP.keys()), index=0)
@@ -160,7 +213,8 @@ with st.sidebar:
     cols = st.columns(2)
     for i, s in enumerate(st.session_state.watchlist[:12]):
         if cols[i % 2].button(s, key=f"quick_{s}", use_container_width=True):
-            st.session_state.symbol = s
+            # Defer symbol_box update to next run (before widget)
+            _request_symbol(s)
             st.rerun()
 
     st.divider()
@@ -169,7 +223,12 @@ with st.sidebar:
     )
 
 
-symbol = st.session_state.symbol
+symbol = str(st.session_state.get("symbol") or "").strip()
+if not symbol:
+    # Fallback: use box content if present
+    box = str(st.session_state.get("symbol_box") or "").strip()
+    symbol = normalize_symbol(box) if box else st.session_state.watchlist[0]
+    st.session_state.symbol = symbol
 
 # ---- router (thin shell for Cloud + local) ----
 if page == "投资SOP":

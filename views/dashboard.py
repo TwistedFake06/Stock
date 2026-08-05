@@ -18,6 +18,7 @@ from views.common import (
     fmt_pct,
     get_price_fields,
     render_bias_banner,
+    render_session_quote_card,
     save_watchlist,
 )
 
@@ -40,6 +41,11 @@ def render_dashboard(
     meta_bits = [b for b in [fields["exchange"], fields["sector"], fields["industry"]] if b]
     if meta_bits:
         st.caption(" · ".join(meta_bits))
+
+    # 盘前 / 常规 / 盘后 / 夜盘时段
+    st.markdown("#### 交易时段 · 盘前盘后")
+    render_session_quote_card(symbol, info)
+    st.markdown("---")
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     cur = fields["currency"]

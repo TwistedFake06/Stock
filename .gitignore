@@ -12,3 +12,5 @@ watchlist.json
 !.env.example
 secrets.local.env
 *.local.env
+data/alert_state.json
+

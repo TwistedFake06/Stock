@@ -196,4 +196,103 @@ def get_price_fields(info: dict) -> dict:
         "exchange": info.get("exchange") or info.get("fullExchangeName") or "",
         "sector": info.get("sector") or "",
         "industry": info.get("industry") or "",
+        # Extended hours (may be None)
+        "pre_price": info.get("preMarketPrice"),
+        "pre_change_pct": info.get("preMarketChangePercent"),
+        "post_price": info.get("postMarketPrice"),
+        "post_change_pct": info.get("postMarketChangePercent"),
+        "regular_price": info.get("regularMarketPrice"),
     }
+
+
+def render_session_quote_card(symbol: str, info: dict | None = None) -> None:
+    """Sidebar/page card: session clock + pre / regular / post prices."""
+    import streamlit as st
+
+    try:
+        from market_session import fetch_extended_quote, extended_intraday
+    except Exception as exc:
+        st.caption(f"扩展时段模块不可用：{exc}")
+        return
+
+    q = fetch_extended_quote(symbol, info)
+    clock = q.session
+
+    # Status banner by session
+    title = f"**{clock.label_zh}** · {clock.et_now}"
+    if clock.session == "rth":
+        st.success(title)
+    elif clock.session in ("pre_market", "after_hours"):
+        st.warning(title)
+    elif clock.session == "overnight":
+        st.info(title)
+    else:
+        st.info(title)
+    if clock.note:
+        st.caption(clock.note)
+
+    c1, c2, c3, c4 = st.columns(4)
+    cur = q.currency
+    suffix = f" {cur}" if cur else ""
+
+    def _px(v):
+        return fmt_number(v, suffix=suffix) if v is not None else "—"
+
+    def _dp(v):
+        return fmt_pct(v) if v is not None else "—"
+
+    c1.metric(
+        f"现价（{q.live_label}）",
+        _px(q.live_price),
+        _dp(q.live_change_pct),
+    )
+    c2.metric(
+        "常规 RTH",
+        _px(q.regular_price),
+        _dp(q.regular_change_pct),
+    )
+    c3.metric(
+        "盘前 Pre",
+        _px(q.pre_price),
+        _dp(q.pre_change_pct),
+    )
+    c4.metric(
+        "盘后 Post",
+        _px(q.post_price),
+        _dp(q.post_change_pct),
+    )
+
+    b1, b2, b3 = st.columns(3)
+    b1.metric("前收", _px(q.regular_prev_close))
+    b2.metric("Bid", _px(q.bid))
+    b3.metric("Ask", _px(q.ask))
+
+    for n in q.notes[:3]:
+        st.caption(f"· {n}")
+
+    with st.expander("扩展时段分时（含盘前/盘后 K 线）", expanded=False):
+        st.caption("Yahoo `prepost=True` · 5 分钟 · 近 5 日；夜盘独立 bar 可能缺失。")
+        try:
+            ext = extended_intraday(symbol, period="5d", interval="5m")
+            if ext is None or ext.empty:
+                st.info("暂无扩展时段分时数据。")
+            else:
+                from charts import price_volume_chart
+                from ui_mobile import plotly_chart as mobile_plotly
+
+                # price_volume_chart expects OHLC columns
+                fig = price_volume_chart(
+                    ext.tail(400),
+                    title=f"{symbol} · 扩展时段 5m",
+                    show_sma=False,
+                    show_bb=False,
+                )
+                mobile_plotly(fig, use_container_width=True)
+                show = ext[["Date", "Open", "High", "Low", "Close", "Volume"]].tail(40).copy()
+                try:
+                    show["Date"] = pd.to_datetime(show["Date"]).dt.strftime("%m-%d %H:%M")
+                except Exception:
+                    pass
+                st.dataframe(show.iloc[::-1], use_container_width=True, hide_index=True)
+        except Exception as exc:
+            st.caption(f"分时加载失败：{exc}")

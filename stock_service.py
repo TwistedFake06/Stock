@@ -182,6 +182,38 @@ def fetch_history(
     return result.copy()
 
 
+def fetch_history_extended(
+    symbol: str,
+    period: str = "5d",
+    interval: str = "5m",
+) -> pd.DataFrame:
+    """
+    Intraday OHLCV with pre/post market bars when Yahoo provides them.
+
+    Uses ``prepost=True``. Best for short periods (1d–5d) and 1m/5m/15m.
+    Daily bars ignore prepost (same as regular history).
+    """
+    ticker = get_ticker(symbol)
+    try:
+        df = ticker.history(
+            period=period,
+            interval=interval,
+            auto_adjust=True,
+            prepost=True,
+        )
+    except Exception:
+        return pd.DataFrame()
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.reset_index()
+    if "Date" in df.columns:
+        df["Date"] = pd.to_datetime(df["Date"])
+    elif "Datetime" in df.columns:
+        df = df.rename(columns={"Datetime": "Date"})
+        df["Date"] = pd.to_datetime(df["Date"])
+    return df
+
+
 def fetch_info(symbol: str) -> dict[str, Any]:
     """Fetch basic quote / company info. Best-effort; fields vary by market."""
     ticker = get_ticker(symbol)
@@ -215,6 +247,33 @@ def fetch_info(symbol: str) -> dict[str, Any]:
                 info["currentPrice"] = info["last_price"]
     except Exception:
         pass
+
+    # Explicit pre / post market fields (Yahoo US equities)
+    # Keep whatever info already has; only fill missing from a second soft read
+    pre_keys = (
+        "preMarketPrice",
+        "preMarketChange",
+        "preMarketChangePercent",
+        "preMarketTime",
+        "postMarketPrice",
+        "postMarketChange",
+        "postMarketChangePercent",
+        "postMarketTime",
+        "regularMarketPrice",
+        "regularMarketChange",
+        "regularMarketChangePercent",
+        "regularMarketPreviousClose",
+        "regularMarketOpen",
+        "regularMarketDayHigh",
+        "regularMarketDayLow",
+        "regularMarketVolume",
+        "bid",
+        "ask",
+    )
+    # Some yfinance versions expose quote via fast path only — leave as-is if present
+    for k in pre_keys:
+        if k not in info:
+            info.setdefault(k, None)
 
     info["_symbol"] = normalize_symbol(symbol)
     return info
