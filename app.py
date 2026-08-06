@@ -45,6 +45,7 @@ try:
     from views.extra_page import render_extra
     from views.options_page import render_options
     from views.scan_page import render_scan
+    from views.hold_page import render_hold_page
     from views.sop_page import render_sop
     from views.technical_page import render_technical
     from views.watchlist_page import render_watchlist
@@ -130,6 +131,7 @@ def _on_symbol_box_change() -> None:
 
 PAGE_OPTIONS = [
     "投资SOP",
+    "我已买入",
     "Watchlist扫描",
     "期权价差",
     "行情看板",
@@ -166,9 +168,11 @@ if "_pending_symbol" in st.session_state:
         st.session_state.symbol = _ps
         st.session_state.symbol_box = _ps
 
-# Jump to 投资SOP page (set by quick-select / scan detail / apply)
+# Jump to 投资SOP / 我已买入 (set by buttons; must run BEFORE selectbox)
 if st.session_state.pop("_goto_sop", False):
     st.session_state.nav_page = "投资SOP"
+if st.session_state.pop("_goto_hold", False):
+    st.session_state.nav_page = "我已买入"
 
 # Seed text box / nav once
 if "symbol_box" not in st.session_state:
@@ -182,7 +186,7 @@ if st.session_state.nav_page not in PAGE_OPTIONS:
 # ---- sidebar ----
 with st.sidebar:
     st.markdown("### 📊 投资 SOP")
-    st.caption("首页 = 投资SOP · 快速选择仅美股 · 资金 HKD")
+    st.caption("已买入？侧栏选「我已买入」填成交价 · 快速选择仅美股")
 
     page = st.selectbox(
         "功能页面",
@@ -248,6 +252,8 @@ if not symbol:
 # ---- router (thin shell for Cloud + local) ----
 if page == "投资SOP":
     render_sop(symbol, period, interval, period_label, interval_label)
+elif page == "我已买入":
+    render_hold_page(symbol, period=period, interval=interval)
 elif page == "Watchlist扫描":
     render_scan(period, interval, period_label)
 elif page == "行情看板":

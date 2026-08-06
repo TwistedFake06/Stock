@@ -14,6 +14,7 @@ from edge_signals import (
     map_sector_etf,
 )
 from exit_plan import apply_long_slippage, build_exit_plan
+from position_coach import advise_open_position
 from mtf_signals import analyze_adx, analyze_fib_levels, merge_entry_with_fib
 from indicators import enrich
 from trade_journal import add_trade, close_trade, journal_stats, load_trades, save_trades
@@ -319,6 +320,35 @@ class TestTradeSOPHelpers(unittest.TestCase):
         self.assertEqual(ep.scale_out_pct, 0.5)
         self.assertIsNotNone(ep.stop_after_t1)
         self.assertTrue(any("时间止损" in b for b in ep.bullets))
+
+    def test_position_coach_stop(self):
+        a = advise_open_position(
+            buy_price=100.0,
+            last_price=95.0,
+            plan_stop=96.0,
+            plan_t1=110.0,
+            plan_t2=115.0,
+        )
+        self.assertEqual(a.action, "止蚀离场")
+
+    def test_position_coach_take_profit(self):
+        a = advise_open_position(
+            buy_price=100.0,
+            last_price=111.0,
+            plan_stop=96.0,
+            plan_t1=110.0,
+            plan_t2=120.0,
+        )
+        self.assertIn(a.action, ("止盈减仓", "止盈清仓"))
+
+    def test_position_coach_hold(self):
+        a = advise_open_position(
+            buy_price=100.0,
+            last_price=102.0,
+            plan_stop=96.0,
+            plan_t1=110.0,
+        )
+        self.assertIn("持有", a.action)
 
     def test_journal_roundtrip(self):
         # isolate temp journal by monkeypatch path would be ideal; use real file carefully
