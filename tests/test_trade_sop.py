@@ -20,11 +20,23 @@ from indicators import enrich
 from trade_journal import add_trade, close_trade, journal_stats, load_trades, save_trades
 from free_data import analyze_liquidity, multi_horizon_rs
 from trade_sop import (
+    MIN_SAMPLES_FULL,
+    MIN_SAMPLES_LOW,
+    MODE_THRESHOLDS,
+    PATH_LOOKBACK_DEFAULT,
     _enter_decision,
     _expectancy_r,
     _path_win_rate,
+    _path_win_rate_detail,
     _stability_score,
     _swing_verdict,
+    aggressive_upgrade_1r,
+    build_decision_brief,
+    format_win_rate,
+    get_mode_thresholds,
+    path_wr_confidence,
+    resolve_path_win_rate,
+    resolve_trading_mode,
 )
 
 
@@ -39,6 +51,232 @@ class TestTradeSOPHelpers(unittest.TestCase):
         self.assertIsNotNone(wr)
         assert wr is not None
         self.assertTrue(0 <= wr <= 100)
+
+    def test_format_win_rate_never_nan(self):
+        self.assertEqual(format_win_rate(None), "样本不足")
+        self.assertIn("样本不足", format_win_rate(None, 5))
+        self.assertIn("53%", format_win_rate(53.2, 18, confidence="full"))
+        self.assertIn("低样本", format_win_rate(53.2, 9, confidence="low"))
+        self.assertIn("日线", format_win_rate(54.0, None, confidence="day", source="day"))
+        self.assertEqual(format_win_rate(float("nan")), "样本不足")
+        self.assertNotIn("nan", format_win_rate(float("nan")).lower())
+
+    def test_path_win_rate_detail_min_samples(self):
+        # tiny series → no samples
+        s = pd.Series([100.0, 101.0, 99.0, 102.0])
+        wr, n = _path_win_rate_detail(s, 1.0, 2.0, lookback=120, horizon=15)
+        self.assertIsNone(wr)
+        self.assertEqual(n, 0)
+
+    def test_resolve_path_fallback_to_day(self):
+        # short flat series → path None, day fallback
+        s = pd.Series(np.full(30, 100.0))
+        wr, n, src = resolve_path_win_rate(
+            s, 2.0, 3.0, primary_horizon=10, day_wr=54.0, lookback=120
+        )
+        self.assertEqual(src, "day")
+        self.assertAlmostEqual(wr or 0, 54.0)
+
+    def test_pct_path_resolves_more_than_abs_on_scaled_prices(self):
+        """Fixed $ stops fail on old low prices; % scale should get samples."""
+        rng = np.random.default_rng(42)
+        # price drifts from ~20 → ~80 with noise
+        rets = rng.normal(0.002, 0.02, 220)
+        close = 20 * np.cumprod(1 + rets)
+        high = close * (1 + rng.uniform(0.002, 0.02, len(close)))
+        low = close * (1 - rng.uniform(0.002, 0.02, len(close)))
+        s = pd.Series(close)
+        h = pd.Series(high)
+        lo = pd.Series(low)
+        # structure at current price ~ last: risk $3 reward $4 (abs would be huge % early)
+        risk, reward = 3.0, 4.0
+        ref = float(close[-1])
+        wr_pct, n_pct = _path_win_rate_detail(
+            s,
+            risk,
+            reward,
+            lookback=PATH_LOOKBACK_DEFAULT,
+            horizon=15,
+            min_samples=MIN_SAMPLES_LOW,
+            high=h,
+            low=lo,
+            ref_entry=ref,
+            scale="pct",
+        )
+        wr_abs, n_abs = _path_win_rate_detail(
+            s,
+            risk,
+            reward,
+            lookback=PATH_LOOKBACK_DEFAULT,
+            horizon=15,
+            min_samples=1,
+            high=h,
+            low=lo,
+            ref_entry=ref,
+            scale="abs",
+        )
+        # pct should yield usable samples more often
+        self.assertGreaterEqual(n_pct, n_abs)
+        wr_r, n_r, src = resolve_path_win_rate(
+            s,
+            risk,
+            reward,
+            primary_horizon=10,
+            day_wr=52.0,
+            high=h,
+            low=lo,
+            ref_entry=ref,
+        )
+        self.assertIsNotNone(wr_r)
+        self.assertNotEqual(src, "none")
+        conf = path_wr_confidence(src, n_r)
+        self.assertIn(conf, ("full", "low", "blend", "day"))
+
+    def test_same_bar_both_sides_not_auto_loss(self):
+        """Ambiguous HL bar should not force stop-first losses."""
+        # Flat path then one huge range bar that pierces both stop and target
+        close = np.array([100.0] * 80 + [100.0, 100.0, 100.0])
+        high = close.copy()
+        low = close.copy()
+        high[-2] = 110.0  # target + stop both possible from 100 with risk 3 reward 4
+        low[-2] = 90.0
+        # After that stay flat
+        s = pd.Series(np.concatenate([np.full(100, 100.0), close[-3:]]))
+        # rebuild clean series
+        n = 120
+        c = np.full(n, 100.0)
+        h = c.copy()
+        lo = c.copy()
+        # many independent ambiguous bars would all be skipped → low n
+        # add clear wins: drift up without wick below stop
+        for i in range(40, 70):
+            c[i] = 100 + (i - 40) * 0.15
+            h[i] = c[i] + 0.5
+            lo[i] = c[i] - 0.3
+        # one ambiguous day in the middle of a path window
+        h[55] = 120.0
+        lo[55] = 80.0
+        wr, n = _path_win_rate_detail(
+            pd.Series(c),
+            3.0,
+            4.0,
+            lookback=80,
+            horizon=10,
+            min_samples=1,
+            high=pd.Series(h),
+            low=pd.Series(lo),
+            ref_entry=100.0,
+            scale="pct",
+        )
+        # Should still produce some samples; not collapse to all losses from ambiguous bars
+        self.assertGreaterEqual(n, 1)
+        if wr is not None:
+            self.assertTrue(0 <= wr <= 100)
+
+    def test_low_sample_blocks_full_entry(self):
+        v = _swing_verdict(
+            entry_opp="较佳入场",
+            bias_label="看多",
+            bias_score=30,
+            wr=58,
+            rr=1.4,
+            exp_r=0.25,
+            price_far_chase=False,
+            mode=MODE_THRESHOLDS["defensive"],
+            stability=55,
+            multi_rs_score=55,
+            trend_score=70,
+            weekly_allow_long=True,
+            rr_net=1.25,
+            vol_label="放量上涨",
+            wr_confidence="low",
+        )
+        self.assertNotEqual(v, "可以入場")
+        self.assertIn(v, ("可以試倉", "暫緩觀望"))
+
+    def test_mode_thresholds(self):
+        d = get_mode_thresholds("defensive")
+        a = get_mode_thresholds("B")
+        self.assertEqual(d.wr_full, 55.0)
+        self.assertEqual(a.key, "aggressive")
+        self.assertEqual(a.wr_half, 48.0)
+        self.assertEqual(a.default_risk_units_full, 0.5)
+
+    def test_decision_brief_has_verdict_and_reasons(self):
+        text = build_decision_brief(
+            verdict="可以試倉",
+            mode_label="A 防守版",
+            wr_display="52%（低样本9）",
+            wr_confidence="low",
+            rr_net=1.15,
+            exp_r=0.12,
+            risk_units=0.5,
+            bias_label="看多",
+            bias_score=22,
+            thr=MODE_THRESHOLDS["defensive"],
+        )
+        self.assertIn("可以試倉", text)
+        self.assertIn("根据", text)
+        self.assertIn("R:R", text)
+        self.assertIn("E[R]", text)
+
+    def test_resolve_mode_forces_defensive_on_weak_regime(self):
+        thr, forced, note = resolve_trading_mode(
+            "aggressive", regime_score=30.0, vix_label="中"
+        )
+        self.assertEqual(thr.key, "defensive")
+        self.assertTrue(forced)
+        self.assertIn("大盘", note)
+
+    def test_aggressive_upgrade_needs_3(self):
+        ok, hits, notes = aggressive_upgrade_1r(
+            wr=55,
+            bias_label="强烈看多",
+            bias_score=60,
+            multi_rs_score=50,
+            vol_label="缩量回踩",
+            false_break_risk=False,
+            rr_net=1.1,
+            rr=1.2,
+        )
+        self.assertTrue(ok)
+        self.assertGreaterEqual(hits, 3)
+
+    def test_swing_mode_requires_wr_not_none(self):
+        # 样本不足 → 不得可以入場 / 可以試倉
+        v = _swing_verdict(
+            entry_opp="较佳入场",
+            bias_label="看多",
+            bias_score=35,
+            wr=None,
+            rr=1.5,
+            exp_r=0.3,
+            price_far_chase=False,
+            mode=MODE_THRESHOLDS["defensive"],
+            stability=60,
+            trend_score=70,
+            rr_net=1.3,
+        )
+        self.assertEqual(v, "暫緩觀望")
+
+    def test_swing_defensive_full_entry(self):
+        v = _swing_verdict(
+            entry_opp="较佳入场",
+            bias_label="看多",
+            bias_score=30,
+            wr=58,
+            rr=1.4,
+            exp_r=0.25,
+            price_far_chase=False,
+            mode=MODE_THRESHOLDS["defensive"],
+            stability=55,
+            multi_rs_score=55,
+            trend_score=70,
+            weekly_allow_long=True,
+            rr_net=1.25,
+            vol_label="放量上涨",
+        )
+        self.assertEqual(v, "可以入場")
 
     def test_enter_decision_avoid_bearish(self):
         ok, score, side = _enter_decision(

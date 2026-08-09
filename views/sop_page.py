@@ -11,7 +11,7 @@ import streamlit as st
 
 from stock_service import cache_bucket, cached_info
 from trade_journal import add_trade, close_trade, journal_stats, load_trades
-from trade_sop import build_trade_sop
+from trade_sop import build_trade_sop, format_win_rate
 from views.common import render_session_quote_card
 
 
@@ -29,9 +29,25 @@ def _fmt(x, nd=2):
     if x is None:
         return "—"
     try:
-        return f"{float(x):.{nd}f}"
+        v = float(x)
+        if v != v:  # NaN
+            return "—"
+        return f"{v:.{nd}f}"
     except (TypeError, ValueError):
         return "—"
+
+
+def _wr_text(sop_or_plan) -> str:
+    """Never show nan% — use preformatted display or format_win_rate."""
+    if sop_or_plan is None:
+        return "样本不足"
+    disp = getattr(sop_or_plan, "win_rate_display", None)
+    if disp:
+        return str(disp)
+    return format_win_rate(
+        getattr(sop_or_plan, "win_rate_pct", None),
+        getattr(sop_or_plan, "win_rate_samples", None),
+    )
 
 
 def render_sop(
@@ -49,7 +65,7 @@ def render_sop(
 
     # ---- compact controls ----
     HKD_PER_USD = 7.8
-    c1, c2, c3, c4 = st.columns([1.1, 1, 1.1, 1])
+    c1, c2, c3, c4, c5 = st.columns([1.0, 0.85, 0.95, 1.15, 0.9])
     with c1:
         capital_hkd = st.number_input(
             "本金 HKD",
@@ -75,6 +91,16 @@ def render_sop(
             key="sop_horizon_select",
         )
     with c4:
+        mode_ui = st.selectbox(
+            "模式",
+            ["A 防守版", "B 进攻版"],
+            index=0
+            if st.session_state.get("sop_mode", "defensive") != "aggressive"
+            else 1,
+            key="sop_mode_select",
+            help="A 高胜率稳健 · B 有根据的搏（默认 0.5R）· 大盘弱/VIX 高会强制 A",
+        )
+    with c5:
         st.write("")
         st.write("")
         if st.button("→ 我已买入", use_container_width=True, key="sop_to_hold"):
@@ -82,9 +108,11 @@ def render_sop(
             st.rerun()
 
     primary_horizon = "h1" if horizon_ui == "0–2周" else "h2"
+    mode_key = "aggressive" if mode_ui.startswith("B") else "defensive"
     st.session_state["sop_capital_hkd"] = capital_hkd
     st.session_state["sop_risk_pct"] = risk_pct
     st.session_state["sop_primary_horizon"] = primary_horizon
+    st.session_state["sop_mode"] = mode_key
     capital_usd = float(capital_hkd) / HKD_PER_USD
 
     with st.spinner("生成计划…"):
@@ -96,6 +124,7 @@ def render_sop(
                 capital=float(capital_usd),
                 risk_pct=float(risk_pct),
                 primary_horizon=primary_horizon,
+                mode=mode_key,
             )
         except Exception as exc:
             st.error(f"分析失败：{type(exc).__name__}: {exc}")
@@ -114,11 +143,22 @@ def render_sop(
     last = sop.last_price
     st.markdown(f"### {name} · `{sop.symbol}` · 现价 **{_fmt(last)}**")
 
+    mode_lab = getattr(sop, "mode_label", "") or "A 防守版"
+    if getattr(sop, "mode_forced", False):
+        st.warning(f"**模式已强制为 {mode_lab}**" + (
+            f"：{sop.mode_note}" if getattr(sop, "mode_note", "") else ""
+        ))
     if primary:
         v = primary.verdict
-        _verdict_box(v)(f"## {v} · {primary.label}")
+        _verdict_box(v)(f"## {v} · {primary.label} · {mode_lab}")
     else:
         st.warning(sop.enter_ok)
+
+    # 决策摘要（自动：结论 + 根据 + 主风险）
+    brief = getattr(sop, "decision_brief", "") or ""
+    if brief:
+        st.markdown("#### 决策摘要")
+        st.info(brief)
 
     # 核心 6 格
     k1, k2, k3, k4, k5, k6 = st.columns(6)
@@ -130,12 +170,7 @@ def render_sop(
     k2.metric("掛單", _fmt(primary.entry_plan if primary else sop.entry_plan))
     k3.metric("止蝕", _fmt(primary.stop_loss if primary else sop.stop_loss))
     k4.metric("目標", _fmt(primary.target if primary else sop.target_t1))
-    k5.metric(
-        "勝率",
-        f"{primary.win_rate_pct:.0f}%"
-        if primary and primary.win_rate_pct is not None
-        else (_fmt(sop.win_rate_pct, 0) + "%" if sop.win_rate_pct is not None else "—"),
-    )
+    k5.metric("勝率", _wr_text(primary if primary else sop))
     net_rr = None
     if primary and getattr(primary, "rr_net", None) is not None:
         net_rr = primary.rr_net
@@ -173,18 +208,15 @@ def render_sop(
         st.error(f"**失效：** {sop.invalidation}")
 
     st.caption(
-        f"建议股数 **{sop.position_shares}** · {sop.position_note} · "
+        f"**{mode_lab}** · 建议股数 **{sop.position_shares}** · "
+        f"允许 **{getattr(sop, 'risk_units', 0):g}R** · {sop.position_note} · "
         f"1R≈HKD {capital_hkd * risk_pct / 100:,.0f}"
     )
 
     # ========== 以下全部折叠 ==========
     with st.expander("另一周期对照", expanded=False):
         if other:
-            wr_s = (
-                f"{other.win_rate_pct:.0f}%"
-                if other.win_rate_pct is not None
-                else "—"
-            )
+            wr_s = _wr_text(other)
             st.markdown(
                 f"**{other.label}** → {other.verdict} · "
                 f"目标 {_fmt(other.target)} · 胜率 {wr_s} · "
@@ -271,14 +303,19 @@ def render_sop(
                     model_wr=primary.win_rate_pct,
                     model_rr=primary.rr_net or primary.rr,
                     model_verdict=primary.verdict,
+                    mode=getattr(sop, "mode", "") or "",
+                    mode_label=getattr(sop, "mode_label", "") or "",
+                    notes=f"模式={getattr(sop, 'mode_label', '')} · 胜率={_wr_text(primary)}",
                 )
-                st.success("已写入")
+                st.success(f"已写入（模式 {getattr(sop, 'mode_label', '')}）")
                 st.rerun()
         trades = load_trades()
         open_t = [t for t in trades if t.get("status") == "open"][:8]
         for t in open_t:
             st.caption(
-                f"#{t.get('id')} {t.get('symbol')} 入{t.get('entry')} 止{t.get('stop')} "
+                f"#{t.get('id')} {t.get('symbol')} "
+                f"[{t.get('mode_label') or t.get('mode') or '?'}] "
+                f"入{t.get('entry')} 止{t.get('stop')} "
                 f"目标{t.get('target')}"
             )
             if st.button(f"平仓 #{t.get('id')}", key=f"sop_close_{t.get('id')}"):
@@ -296,6 +333,9 @@ def render_sop(
     with st.expander("模型说明", expanded=False):
         st.markdown(
             """
+- **模式 A 防守**：胜率≥55%/50%，净R:R≥1.2，E[R]≥0.15，稳定度≥45  
+- **模式 B 进攻**：胜率≥52%/48%，净R:R≥1.0，默认 0.5R，≥3 项加分可升 1R  
+- **路径胜率**：历史先到目标再触止损；样本&lt;12 显示「样本不足」（禁止当高胜率）  
 - **主周期**决定做不做、出场、净R:R  
 - **胜率**＝历史路径先到目标再触止蚀（非保证）  
 - **净R:R**＝扣约 0.15% 单边滑点  

@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from stock_service import DEFAULT_WATCHLIST, normalize_symbol
-from trade_sop import build_trade_sop
+from trade_sop import build_trade_sop, format_win_rate
 
 ROOT = Path(__file__).resolve().parents[1]
 SCAN_FILE = ROOT / "watchlist_scan.txt"
@@ -82,7 +82,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     )
 
     HKD_PER_USD = 7.8
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     with c1:
         capital_hkd = st.number_input(
             "本金 HKD",
@@ -101,19 +101,29 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
             help="按此周期判定可入場（含滑点净R:R）",
         )
     with c4:
+        mode_ui = st.selectbox(
+            "模式",
+            ["A 防守版", "B 进攻版"],
+            index=0 if st.session_state.get("sop_mode", "defensive") != "aggressive" else 1,
+            help="与投资SOP 同源门檻",
+        )
+    with c5:
         min_level = st.selectbox(
             "顯示級別",
             ["适合+谨慎", "仅适合入场", "全部"],
             index=0,
         )
-    with c5:
+    with c6:
         st.write("")
         st.write("")
         save_list = st.checkbox("寫入 scan 檔", value=True)
     capital = float(capital_hkd) / HKD_PER_USD
     primary_horizon = "h1" if horizon_ui == "0–2周" else "h2"
+    mode_key = "aggressive" if str(mode_ui).startswith("B") else "defensive"
+    st.session_state["sop_mode"] = mode_key
     st.caption(
-        f"仓位 USD≈${capital:,.0f} · 主周期 **{horizon_ui}** · 含出场/净R:R 逻辑"
+        f"仓位 USD≈${capital:,.0f} · 主周期 **{horizon_ui}** · "
+        f"模式 **{mode_ui}** · 含出场/净R:R"
     )
 
     if src == "App 自選股":
@@ -137,7 +147,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     list_key = hashlib.md5(
         (
             ",".join(symbols)
-            + f"|{period}|{interval}|{capital:.0f}|{risk_pct}|{primary_horizon}"
+            + f"|{period}|{interval}|{capital:.0f}|{risk_pct}|{primary_horizon}|{mode_key}"
         ).encode()
     ).hexdigest()[:12]
     cache_key = f"scan_cache_{list_key}"
@@ -196,15 +206,31 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                         capital=float(capital),
                         risk_pct=float(risk_pct),
                         primary_horizon=primary_horizon,
+                        mode=mode_key,
                     )
                     h1 = getattr(sop, "swing_h1", None)
                     h2 = getattr(sop, "swing_h2", None)
                     prim = getattr(sop, "primary_plan", None) or h1
                     exit_pl = getattr(sop, "exit_plan", None)
+                    wr_h1 = (
+                        getattr(h1, "win_rate_display", None)
+                        or format_win_rate(
+                            getattr(h1, "win_rate_pct", None) if h1 else None,
+                            getattr(h1, "win_rate_samples", None) if h1 else None,
+                        )
+                    )
+                    wr_h2 = (
+                        getattr(h2, "win_rate_display", None)
+                        or format_win_rate(
+                            getattr(h2, "win_rate_pct", None) if h2 else None,
+                            getattr(h2, "win_rate_samples", None) if h2 else None,
+                        )
+                    )
                     rows_all.append(
                         {
                             "代码": sop.symbol,
                             "名称": sop.name,
+                            "模式": getattr(sop, "mode_label", mode_ui),
                             "结论": sop.enter_ok,
                             "主周期": getattr(prim, "label", horizon_ui) if prim else horizon_ui,
                             "主结论": getattr(prim, "verdict", "—") if prim else "—",
@@ -218,6 +244,8 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                             "止蝕": sop.stop_loss,
                             "目标0-2周": getattr(h1, "target", None) if h1 else sop.target_t1,
                             "目标2-4周": getattr(h2, "target", None) if h2 else sop.target_t2,
+                            "胜率0-2周": wr_h1,
+                            "胜率2-4周": wr_h2,
                             "胜率0-2周%": getattr(h1, "win_rate_pct", None) if h1 else None,
                             "胜率2-4周%": getattr(h2, "win_rate_pct", None) if h2 else None,
                             "R:R_0-2周": getattr(h1, "rr", None) if h1 else sop.rr_t1,

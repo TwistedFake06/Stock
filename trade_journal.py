@@ -31,6 +31,8 @@ class JournalTrade:
     model_wr: float | None = None
     model_rr: float | None = None
     model_verdict: str = ""
+    mode: str = ""  # defensive | aggressive（A/B，必填）
+    mode_label: str = ""  # A 防守版 | B 进攻版
     status: str = "open"  # open | closed
     exit_price: float | None = None
     exit_date: str | None = None
@@ -78,9 +80,20 @@ def add_trade(
     model_wr: float | None = None,
     model_rr: float | None = None,
     model_verdict: str = "",
+    mode: str = "",
+    mode_label: str = "",
     notes: str = "",
     opened: str | None = None,
 ) -> dict[str, Any]:
+    mode_key = (mode or "").strip().lower()
+    if mode_key in ("a", "防守", "防守版", "def", "defence", "defense"):
+        mode_key = "defensive"
+    elif mode_key in ("b", "进攻", "进攻版", "進攻", "進攻版", "agg"):
+        mode_key = "aggressive"
+    if not mode_label and mode_key == "defensive":
+        mode_label = "A 防守版"
+    elif not mode_label and mode_key == "aggressive":
+        mode_label = "B 进攻版"
     t = JournalTrade(
         id=str(uuid.uuid4())[:8],
         symbol=str(symbol).upper(),
@@ -94,6 +107,8 @@ def add_trade(
         model_wr=model_wr,
         model_rr=model_rr,
         model_verdict=model_verdict,
+        mode=mode_key,
+        mode_label=mode_label or mode_key,
         notes=notes,
         status="open",
     )

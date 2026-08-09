@@ -7,6 +7,7 @@ stability score, and ordered actions.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -78,6 +79,10 @@ class SwingHorizonPlan:
     rr_net: float | None = None
     expectancy_net: float | None = None
     slip_note: str = ""
+    # 路径胜率元数据（避免 nan% / 说明样本）
+    win_rate_samples: int | None = None
+    win_rate_source: str = ""  # path_hN | day | none
+    win_rate_display: str = "样本不足"
 
 
 @dataclass
@@ -178,50 +183,552 @@ class TradeSOP:
     h1_label: str = "—"
     h1_summary: str = ""
     h1_ready: bool = False
+    # 双模式 SOP（A 防守 / B 进攻）
+    mode: str = "defensive"  # defensive | aggressive
+    mode_label: str = "A 防守版"
+    mode_forced: bool = False
+    mode_note: str = ""
+    win_rate_samples: int | None = None
+    win_rate_source: str = ""
+    win_rate_display: str = "样本不足"
+    risk_units: float = 0.0  # 允许的 R 数：1.0 / 0.5 / 0
+    upgrade_1r: bool = False
+    upgrade_hits: int = 0
+    upgrade_notes: list[str] = field(default_factory=list)
+    # 一屏「决策摘要」：1–2 句说明为什么是这个结论
+    decision_brief: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Dual-mode thresholds (spec v1.2)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class ModeThresholds:
+    key: str
+    label: str
+    wr_full: float
+    wr_half: float
+    stab_full: float
+    stab_half: float
+    rr_full: float  # 净 R:R 优先；无净则用纸面
+    rr_half: float
+    exp_full: float
+    exp_half: float
+    max_hold_h1: int
+    max_hold_h2: int
+    default_risk_units_full: float  # 满仓默认 R（进攻版默认 0.5，达加分再升 1）
+
+
+MODE_THRESHOLDS: dict[str, ModeThresholds] = {
+    "defensive": ModeThresholds(
+        key="defensive",
+        label="A 防守版",
+        wr_full=55.0,
+        wr_half=50.0,
+        stab_full=45.0,
+        stab_half=40.0,
+        rr_full=1.20,
+        rr_half=1.00,
+        exp_full=0.15,
+        exp_half=0.05,
+        max_hold_h1=12,
+        max_hold_h2=20,
+        default_risk_units_full=1.0,
+    ),
+    "aggressive": ModeThresholds(
+        key="aggressive",
+        label="B 进攻版",
+        wr_full=52.0,
+        wr_half=48.0,
+        stab_full=25.0,
+        stab_half=25.0,
+        rr_full=1.00,
+        rr_half=0.95,
+        exp_full=0.10,
+        exp_half=0.0,
+        max_hold_h1=10,
+        max_hold_h2=15,
+        default_risk_units_full=0.5,
+    ),
+}
+
+
+def get_mode_thresholds(mode: str) -> ModeThresholds:
+    key = (mode or "defensive").strip().lower()
+    if key in ("a", "防守", "防守版", "def", "defence", "defense"):
+        key = "defensive"
+    elif key in ("b", "进攻", "进攻版", "進攻", "進攻版", "agg", "attack"):
+        key = "aggressive"
+    return MODE_THRESHOLDS.get(key, MODE_THRESHOLDS["defensive"])
+
+
+# Path WR quality tiers（优化后）
+PATH_LOOKBACK_DEFAULT = 180
+MIN_SAMPLES_FULL = 12  # 可支撑「可以入場」
+MIN_SAMPLES_LOW = 8  # 显示胜率，最多试仓
+MIN_SAMPLES_BLEND = 5  # 与 day_wr 混合的最低路径样本
+
+
+def format_win_rate(
+    win_rate: float | None,
+    samples: int | None = None,
+    *,
+    min_samples: int = MIN_SAMPLES_FULL,
+    confidence: str | None = None,
+    source: str = "",
+) -> str:
+    """UI-safe win-rate string — never ``nan%``."""
+    src = (source or "").lower()
+    conf = (confidence or "").lower()
+    if conf not in ("full", "low", "day", "blend", "none", ""):
+        conf = ""
+    # Infer confidence from source/samples when not passed
+    if not conf:
+        if "day" in src and "blend" not in src and "path" not in src:
+            conf = "day"
+        elif "blend" in src:
+            conf = "blend"
+        elif "low" in src or (
+            samples is not None and MIN_SAMPLES_LOW <= int(samples) < MIN_SAMPLES_FULL
+        ):
+            conf = "low"
+        elif win_rate is not None:
+            conf = "full"
+
+    if win_rate is None:
+        floor = MIN_SAMPLES_LOW
+        if samples is not None and samples < floor:
+            return f"样本不足（<{floor}）"
+        if samples is not None and samples < min_samples:
+            return f"样本不足（<{min_samples}）"
+        return "样本不足"
+    try:
+        wr = float(win_rate)
+    except (TypeError, ValueError):
+        return "样本不足"
+    if math.isnan(wr) or math.isinf(wr):
+        return "样本不足"
+    if conf == "day":
+        return f"{wr:.0f}%（日线估算）"
+    if conf == "blend":
+        nbit = f"·n{int(samples)}" if samples else ""
+        return f"{wr:.0f}%（路径+日线{nbit}）"
+    if conf == "low" or (
+        samples is not None and MIN_SAMPLES_LOW <= int(samples) < MIN_SAMPLES_FULL
+    ):
+        return f"{wr:.0f}%（低样本{int(samples)}）"
+    if samples is not None and samples > 0:
+        return f"{wr:.0f}%（样本{int(samples)}）"
+    return f"{wr:.0f}%"
 
 
 def _path_win_rate(
     close: pd.Series,
     risk_per_share: float,
     reward_per_share: float,
-    lookback: int = 80,
+    lookback: int = PATH_LOOKBACK_DEFAULT,
     horizon: int = 15,
+    min_samples: int = MIN_SAMPLES_FULL,
+    *,
+    high: pd.Series | None = None,
+    low: pd.Series | None = None,
+    ref_entry: float | None = None,
+    scale: str = "pct",
 ) -> float | None:
     """
     Historical path win rate: from each past bar, long at close;
     win if +reward hit before -risk within horizon bars.
+    Timeout paths (neither hit) are skipped and do not count as samples.
+    Default scale=pct uses risk/reward as % of ref_entry on every historical bar.
     """
-    if close is None or len(close) < lookback + horizon + 5:
-        return None
-    if risk_per_share <= 0 or reward_per_share <= 0:
-        return None
+    wr, _n = _path_win_rate_detail(
+        close,
+        risk_per_share,
+        reward_per_share,
+        lookback=lookback,
+        horizon=horizon,
+        min_samples=min_samples,
+        high=high,
+        low=low,
+        ref_entry=ref_entry,
+        scale=scale,
+    )
+    return wr
 
+
+def _align_ohlc(
+    close: pd.Series,
+    high: pd.Series | None,
+    low: pd.Series | None,
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None]:
     c = close.astype(float).values
+    n = len(c)
+    h_arr = l_arr = None
+    if high is not None and low is not None and len(high) == n and len(low) == n:
+        try:
+            h_arr = high.astype(float).values
+            l_arr = low.astype(float).values
+            if np.all(np.isnan(h_arr)) or np.all(np.isnan(l_arr)):
+                h_arr = l_arr = None
+        except Exception:
+            h_arr = l_arr = None
+    return c, h_arr, l_arr
+
+
+def _path_win_rate_detail(
+    close: pd.Series,
+    risk_per_share: float,
+    reward_per_share: float,
+    lookback: int = PATH_LOOKBACK_DEFAULT,
+    horizon: int = 15,
+    min_samples: int = MIN_SAMPLES_LOW,
+    *,
+    high: pd.Series | None = None,
+    low: pd.Series | None = None,
+    ref_entry: float | None = None,
+    scale: str = "pct",
+) -> tuple[float | None, int]:
+    """
+    Return (win_rate_pct or None, effective_sample_count).
+
+    scale:
+      - ``pct``: risk/reward as fraction of *current* structure entry, applied
+        proportionally on each historical close (fixes abs-$ on old prices).
+      - ``abs``: legacy fixed $ stop/target distance.
+    High/Low used when provided (same-bar both sides → stop first, conservative).
+    """
+    if close is None or len(close) < max(40, horizon + 25):
+        return None, 0
+    if risk_per_share <= 0 or reward_per_share <= 0:
+        return None, 0
+
+    c, h_arr, l_arr = _align_ohlc(close, high, low)
+    n = len(c)
+    # need some history; soft lookback if series shorter than lookback+horizon
+    lb = min(int(lookback), max(30, n - horizon - 5))
+    if lb < 25:
+        return None, 0
+
+    # % of current structure (prefer mid entry)
+    ref = float(ref_entry) if ref_entry and ref_entry > 0 else float(c[-1])
+    if ref <= 0:
+        return None, 0
+    risk_pct = float(risk_per_share) / ref
+    reward_pct = float(reward_per_share) / ref
+    # sanity clamps — extreme structure still measurable
+    risk_pct = float(min(0.30, max(0.004, risk_pct)))
+    reward_pct = float(min(0.50, max(0.004, reward_pct)))
+
     wins = 0
     total = 0
-    start = max(20, len(c) - lookback - horizon)
-    end = len(c) - horizon
+    start = max(20, n - lb - horizon)
+    end = n - horizon
+    use_hl = h_arr is not None and l_arr is not None
+    use_pct = (scale or "pct").lower() != "abs"
+
     for i in range(start, end):
-        entry = c[i]
-        stop = entry - risk_per_share
-        target = entry + reward_per_share
-        path = c[i + 1 : i + 1 + horizon]
+        entry = float(c[i])
+        if entry <= 0 or math.isnan(entry):
+            continue
+        if use_pct:
+            stop = entry * (1.0 - risk_pct)
+            target = entry * (1.0 + reward_pct)
+        else:
+            stop = entry - float(risk_per_share)
+            target = entry + float(reward_per_share)
+        if stop >= entry or target <= entry:
+            continue
+
         hit_t = hit_s = False
-        for px in path:
-            if px <= stop:
-                hit_s = True
-                break
-            if px >= target:
-                hit_t = True
-                break
-        if not hit_t and not hit_s:
-            continue  # no resolution — skip
+        ambiguous = False
+        for j in range(1, horizon + 1):
+            idx = i + j
+            if use_hl:
+                lo = float(l_arr[idx])
+                hi = float(h_arr[idx])
+                if math.isnan(lo) or math.isnan(hi):
+                    px = float(c[idx])
+                    if math.isnan(px):
+                        continue
+                    if px <= stop:
+                        hit_s = True
+                        break
+                    if px >= target:
+                        hit_t = True
+                        break
+                    continue
+                # 日线无法知道先触哪边：同根既触止损又触目标 → 整条路径作 timeout（中性）
+                # （旧逻辑「一律算止损」会系统性压低胜率）
+                stop_hit = lo <= stop
+                tgt_hit = hi >= target
+                if stop_hit and tgt_hit:
+                    ambiguous = True
+                    break
+                if stop_hit:
+                    hit_s = True
+                    break
+                if tgt_hit:
+                    hit_t = True
+                    break
+            else:
+                px = float(c[idx])
+                if math.isnan(px):
+                    continue
+                if px <= stop:
+                    hit_s = True
+                    break
+                if px >= target:
+                    hit_t = True
+                    break
+        if ambiguous or (not hit_t and not hit_s):
+            continue  # timeout / 歧义 — 不计入
         total += 1
         if hit_t:
             wins += 1
-    if total < 12:
-        return None
-    return 100.0 * wins / total
+
+    if total < min_samples:
+        return None, total
+    return 100.0 * wins / total, total
+
+
+def resolve_path_win_rate(
+    close: pd.Series,
+    risk_per_share: float,
+    reward_per_share: float,
+    *,
+    primary_horizon: int = 15,
+    day_wr: float | None = None,
+    lookback: int = PATH_LOOKBACK_DEFAULT,
+    min_samples: int = MIN_SAMPLES_FULL,
+    high: pd.Series | None = None,
+    low: pd.Series | None = None,
+    ref_entry: float | None = None,
+) -> tuple[float | None, int | None, str]:
+    """
+    Fallback chain (optimized):
+      1) % path + High/Low at primary / 15 / 20 / 30  (full if n≥12)
+      2) same with low sample n≥8 → source ``*_low``
+      3) path n≥5 blend 0.6*path + 0.4*day
+      4) day_wr only
+      5) None → 样本不足
+
+    Returns (wr, samples_or_None, source).
+    Source encodes confidence: path_hN | path_hN_low | path_day_blend | day | none
+    """
+    horizons: list[int] = []
+    for h in (int(primary_horizon), 15, 20, 30):
+        if h > 0 and h not in horizons:
+            horizons.append(h)
+
+    best_full: tuple[float, int, int] | None = None  # wr, n, h
+    best_low: tuple[float, int, int] | None = None
+    best_any: tuple[float, int, int] | None = None  # even n < 8 for blend
+    last_n = 0
+
+    for h in horizons:
+        # Prefer pct+HL; min_samples=LOW so we get rate back for tiering
+        wr, n = _path_win_rate_detail(
+            close,
+            risk_per_share,
+            reward_per_share,
+            lookback=lookback,
+            horizon=h,
+            min_samples=MIN_SAMPLES_LOW,
+            high=high,
+            low=low,
+            ref_entry=ref_entry,
+            scale="pct",
+        )
+        last_n = max(last_n, n)
+        if wr is None:
+            # still capture raw n via min_samples=1 for blend pool
+            wr1, n1 = _path_win_rate_detail(
+                close,
+                risk_per_share,
+                reward_per_share,
+                lookback=lookback,
+                horizon=h,
+                min_samples=1,
+                high=high,
+                low=low,
+                ref_entry=ref_entry,
+                scale="pct",
+            )
+            last_n = max(last_n, n1)
+            if wr1 is not None and n1 >= MIN_SAMPLES_BLEND:
+                if best_any is None or n1 > best_any[1]:
+                    best_any = (float(wr1), int(n1), h)
+            continue
+
+        if n >= min_samples:
+            if best_full is None or n > best_full[1]:
+                best_full = (float(wr), int(n), h)
+        elif n >= MIN_SAMPLES_LOW:
+            if best_low is None or n > best_low[1]:
+                best_low = (float(wr), int(n), h)
+        if n >= MIN_SAMPLES_BLEND:
+            if best_any is None or n > best_any[1]:
+                best_any = (float(wr), int(n), h)
+
+    if best_full is not None:
+        wr, n, h = best_full
+        return round(wr, 1), n, f"path_h{h}"
+
+    if best_low is not None:
+        wr, n, h = best_low
+        return round(wr, 1), n, f"path_h{h}_low"
+
+    # Soft blend: partial path + day
+    day_v: float | None = None
+    if day_wr is not None:
+        try:
+            d = float(day_wr)
+            if not math.isnan(d) and not math.isinf(d):
+                day_v = d
+        except (TypeError, ValueError):
+            day_v = None
+
+    if best_any is not None and day_v is not None:
+        wr, n, h = best_any
+        blended = 0.60 * wr + 0.40 * day_v
+        return round(blended, 1), n, f"path_day_blend_h{h}"
+
+    if day_v is not None:
+        return round(day_v, 1), None, "day"
+
+    return None, (last_n if last_n > 0 else None), "none"
+
+
+def path_wr_confidence(source: str, samples: int | None = None) -> str:
+    """Map source/samples → full | low | day | blend | none."""
+    src = (source or "").lower()
+    if not src or src == "none":
+        return "none"
+    if src == "day":
+        return "day"
+    if "blend" in src:
+        return "blend"
+    if src.endswith("_low") or "low" in src:
+        return "low"
+    if samples is not None and samples < MIN_SAMPLES_FULL:
+        return "low"
+    if src.startswith("path"):
+        return "full"
+    return "none"
+
+
+def build_decision_brief(
+    *,
+    verdict: str,
+    mode_label: str,
+    wr_display: str,
+    wr_confidence: str = "none",
+    rr_net: float | None = None,
+    rr_paper: float | None = None,
+    exp_r: float | None = None,
+    risk_units: float = 0.0,
+    bias_label: str = "",
+    bias_score: float = 0.0,
+    price_far_chase: bool = False,
+    false_break_risk: bool = False,
+    against_trend: bool = False,
+    weekly_allow_long: bool = True,
+    vol_label: str = "",
+    mode_forced: bool = False,
+    mode_note: str = "",
+    thr: ModeThresholds | None = None,
+) -> str:
+    """
+    一屏决策摘要：结论 + 主要根据 + 主风险（1–3 短句，中文）。
+    """
+    thr = thr or MODE_THRESHOLDS["defensive"]
+    v = verdict or "暫緩觀望"
+    conf = (wr_confidence or "none").lower()
+
+    # —— 结论句 ——
+    if v in ("可以入場", "适合入场"):
+        lead = f"**可以入場**（{mode_label} · 允许约 {risk_units:g}R）"
+    elif v in ("可以試倉", "谨慎试仓"):
+        lead = f"**可以試倉**（{mode_label} · 固定约 {max(risk_units, 0.5):g}R）"
+    elif v in ("不做多", "回避"):
+        lead = f"**不做多**（{mode_label}）"
+    else:
+        lead = f"**暫緩觀望**（{mode_label}）"
+
+    # —— 根据（胜率 / R:R / E[R]）——
+    reasons: list[str] = []
+    wr_bit = wr_display or "样本不足"
+    if conf == "full":
+        reasons.append(f"路径胜率 {wr_bit}（样本充足）")
+    elif conf == "low":
+        reasons.append(f"路径胜率 {wr_bit}（低样本，撑不满仓）")
+    elif conf == "blend":
+        reasons.append(f"胜率 {wr_bit}（路径+日线混合）")
+    elif conf == "day":
+        reasons.append(f"胜率 {wr_bit}（仅日线估算）")
+    else:
+        reasons.append("路径胜率样本不足，不用高胜率背书")
+
+    rr_use = rr_net if rr_net is not None else rr_paper
+    if rr_use is not None:
+        tag = "净R:R" if rr_net is not None else "纸面R:R"
+        ok = "达标" if rr_use >= thr.rr_half else "偏弱"
+        if rr_use >= thr.rr_full:
+            ok = "良好"
+        reasons.append(f"{tag} {rr_use:.2f}（{ok}，满仓线≥{thr.rr_full:.2f}）")
+    else:
+        reasons.append("R:R 暂不可算")
+
+    if exp_r is not None:
+        if exp_r >= thr.exp_full:
+            reasons.append(f"E[R] {exp_r:+.2f}（正期望）")
+        elif exp_r >= 0:
+            reasons.append(f"E[R] {exp_r:+.2f}（弱正/边缘）")
+        else:
+            reasons.append(f"E[R] {exp_r:+.2f}（负期望，不利开仓）")
+
+    if bias_label:
+        reasons.append(f"方向 {bias_label}（{bias_score:+.0f}）")
+
+    why = "根据：" + "；".join(reasons[:4]) + "。"
+
+    # —— 主风险 / 限制 ——
+    risks: list[str] = []
+    if mode_forced and mode_note:
+        risks.append(mode_note)
+    if price_far_chase:
+        risks.append("现价远离入场区（追高）")
+    if false_break_risk:
+        risks.append("假突破风险")
+    if against_trend:
+        risks.append("逆势（大盘/板块偏空）")
+    if not weekly_allow_long:
+        risks.append("周线偏空")
+    if vol_label in ("放量下跌",):
+        risks.append("放量下跌")
+    if conf in ("low", "day", "blend") and v in ("可以試倉", "谨慎试仓", "可以入場", "适合入场"):
+        risks.append("胜率置信度不足，勿加仓到满仓")
+    if exp_r is not None and exp_r < 0 and v not in ("不做多", "回避"):
+        risks.append("负期望结构")
+    if rr_use is not None and rr_use < thr.rr_half:
+        risks.append("赔率未过试仓线")
+
+    if v in ("可以入場", "适合入场"):
+        tip = "主风险：" + ("；".join(risks[:3]) if risks else "按计划限价，止损硬挂，到 T1 减半。")
+    elif v in ("可以試倉", "谨慎试仓"):
+        tip = "限制：" + (
+            "；".join(risks[:3]) if risks else "半仓试错，不达标不加到 1R。"
+        )
+    elif v in ("不做多", "回避"):
+        tip = "原因偏向：" + (
+            "；".join(risks[:3]) if risks else "方向或结构不支持做多。"
+        )
+    else:
+        tip = "暂缓主因：" + (
+            "；".join(risks[:3]) if risks else "门檻未齐，等回入場区或环境改善。"
+        )
+
+    return f"{lead}。{why}{tip}"
 
 
 def _stability_score(risk, trend, bias_score: float) -> tuple[float, str]:
@@ -272,6 +779,28 @@ def _expectancy_r(win_rate_pct: float | None, rr: float | None) -> float | None:
     return round(p * float(rr) - (1.0 - p) * 1.0, 3)
 
 
+def _bias_ok_for_mode(
+    mode: ModeThresholds,
+    bias_label: str,
+    bias_score: float,
+    *,
+    full: bool,
+) -> bool:
+    """Mode-specific bias gates (spec §2)."""
+    lab = bias_label or ""
+    if "强烈看空" in lab:
+        return False
+    if full:
+        if mode.key == "aggressive":
+            return ("强烈看多" in lab) or (bias_score >= 50)
+        # defensive: 看多 or 强烈看多
+        return ("看多" in lab) or bias_score >= 18
+    # trial
+    if mode.key == "aggressive":
+        return bias_score >= 10 and "看空" not in lab
+    return bias_score >= -5 and "强烈看空" not in lab
+
+
 def _swing_verdict(
     *,
     entry_opp: str,
@@ -291,86 +820,182 @@ def _swing_verdict(
     adx_trending: bool | None = None,
     adx_value: float | None = None,
     h1_ready: bool | None = None,
+    mode: ModeThresholds | None = None,
+    stability: float | None = None,
+    multi_rs_score: float | None = None,
+    rr_net: float | None = None,
+    wr_confidence: str = "full",
 ) -> str:
     """
-    短线波段结论（偏操作、仍挡明显亏钱结构）:
+    短线波段结论（双模式门檻）:
       可以入場 | 可以試倉 | 暫緩觀望 | 不做多
+
+    wr_confidence: full | low | day | blend | none
+      - full: 样本≥12，可满仓
+      - low/blend/day: 最多试仓（有胜率数字但不撑满仓）
+      - none: 样本不足，不可开
     """
+    thr = mode or MODE_THRESHOLDS["defensive"]
+    # 门檻用净 R:R（可执行）；无则退回纸面
+    rr_gate = rr_net if rr_net is not None else rr
+    wr_conf = (wr_confidence or "full").lower()
+
     if entry_opp == "偏空回避" or "强烈看空" in bias_label:
         return "不做多"
     if "看空" in bias_label and bias_score <= -25:
         return "不做多"
     if not weekly_allow_long:
-        # 周线空头：短线不做「可以入場」；若其他极差直接不做多
-        if bias_score < 0 or entry_opp in ("偏空回避", "不宜追高"):
-            return "不做多"
+        # 周线空头：防守版更严；进攻版最多试仓
+        if thr.key == "defensive":
+            if bias_score < 0 or entry_opp in ("偏空回避", "不宜追高"):
+                return "不做多"
+        else:
+            if bias_score < -10 or entry_opp in ("偏空回避",):
+                return "不做多"
     if price_far_chase or entry_opp == "不宜追高":
         return "暫緩觀望"
     if vol_label == "放量下跌":
         return "暫緩觀望"
-    # 假突破：禁止追多；明显失败则暂缓
-    if false_break_risk:
+    # 缩量假突破：进攻版直接降级（后面最多试仓）
+    shrink_fbo = false_break_risk and vol_label in ("缩量", "缩量回踩", "缩量整理")
+    if false_break_risk and thr.key == "defensive":
         return "暫緩觀望"
+    if false_break_risk and thr.key == "aggressive" and not shrink_fbo:
+        # 进攻：假突破仍暂缓满仓路径
+        pass
+    if false_break_risk and thr.key == "aggressive":
+        # 不允许「可以入場」；试仓在下方处理
+        pass
     if block_breakout_chase and price_far_chase:
         return "暫緩觀望"
-    # 逆势（大盘/板块空、个股硬多）→ 不做满仓，最多暂缓
     if against_trend and trend_label == "逆势":
         return "暫緩觀望"
-    # 震荡市 + 追突破形态 → 暂缓（ADX 低）
     if adx_trending is False and adx_value is not None and adx_value < 18:
         if entry_opp in ("较佳入场",) and block_breakout_chase:
             return "暫緩觀望"
-    # 赔率太差：短线也难赚
-    if rr is not None and rr < 0.95:
+    # 绝对地板：赔率/期望过差
+    if rr_gate is not None and rr_gate < 0.90:
         return "暫緩觀望"
     if exp_r is not None and exp_r < -0.08:
         return "暫緩觀望"
 
     good_setup = entry_opp in ("较佳入场", "可关注")
-    ok_bias = bias_score >= -8 and "强烈看空" not in bias_label
-    wr_ok = wr is None or wr >= 50
-    wr_good = wr is None or wr >= 55
-    rr_ok = rr is None or rr >= 1.05
-    rr_good = rr is not None and rr >= 1.25
-    exp_ok = exp_r is None or exp_r >= 0.0
-    exp_good = exp_r is not None and exp_r >= 0.10
+    # 相对强弱：进攻版不得极弱；防守版需同步或偏强
+    rs_ok_full = multi_rs_score is None or multi_rs_score >= (
+        48 if thr.key == "defensive" else 35
+    )
+    rs_ok_half = multi_rs_score is None or multi_rs_score >= (
+        40 if thr.key == "defensive" else 28
+    )
+    stab_ok_full = stability is None or stability >= thr.stab_full
+    stab_ok_half = stability is None or stability >= thr.stab_half
+    # 胜率：None=样本不足；full 才可满仓；low/day/blend 最多试仓
+    wr_full_ok = wr is not None and wr >= thr.wr_full and wr_conf == "full"
+    wr_half_ok = wr is not None and wr >= thr.wr_half and wr_conf in (
+        "full",
+        "low",
+        "blend",
+        "day",
+    )
+    rr_good = rr_gate is not None and rr_gate >= thr.rr_full
+    rr_ok = rr_gate is not None and rr_gate >= thr.rr_half
+    exp_good = exp_r is not None and exp_r >= thr.exp_full
+    exp_ok = exp_r is not None and exp_r >= thr.exp_half
+    bias_full = _bias_ok_for_mode(thr, bias_label, bias_score, full=True)
+    bias_half = _bias_ok_for_mode(thr, bias_label, bias_score, full=False)
     trend_ok = trend_score is None or trend_score >= 48
     trend_good = trend_score is None or trend_score >= 60
-    no_fbo = not false_break_risk and not (
-        block_breakout_chase and entry_opp == "不宜追高"
+    no_fbo = not false_break_risk
+    weekly_ok_full = weekly_allow_long  # 防守满仓要求周线允许多
+    if thr.key == "aggressive":
+        weekly_ok_full = True  # 进攻满仓允许中性；空头在下面 cap 试仓
+
+    vol_ok_full = vol_label not in ("放量下跌",) and not (
+        thr.key == "defensive" and vol_label in ("缩量假突破",)
     )
+    # 防守版量能需有确认（非放量下跌；偏好非缩量破位）
+    if thr.key == "defensive" and vol_label in ("放量下跌", "缩量破位"):
+        vol_ok_full = False
 
     if (
         good_setup
-        and ok_bias
-        and wr_good
+        and bias_full
+        and wr_full_ok
         and rr_good
         and exp_good
+        and stab_ok_full
+        and rs_ok_full
+        and vol_ok_full
         and not price_far_chase
         and not against_trend
         and trend_good
         and no_fbo
-        and not block_breakout_chase  # 满仓不要在「仅待确认突破」时追
-        and weekly_allow_long
+        and not block_breakout_chase
+        and weekly_ok_full
+        and weekly_allow_long  # 周线空头永不「可以入場」
         and (adx_trending is not False or (adx_value is not None and adx_value >= 18))
+        and not shrink_fbo
     ):
-        # 可以入場：日线OK；1H 未就绪仍可挂限价（ready 仅影响文案）
         return "可以入場"
-    if ok_bias and wr_ok and rr_ok and exp_ok and entry_opp not in ("偏空回避",):
+
+    if bias_half and wr_half_ok and rr_ok and exp_ok and stab_ok_half and rs_ok_half:
+        if entry_opp in ("偏空回避",):
+            return "暫緩觀望"
         if against_trend:
             return "暫緩觀望"
         if not weekly_allow_long:
-            # 周线空头最多试仓，且要求日线结构尚可
-            if good_setup and not false_break_risk and wr_ok:
+            # 周线空头：两模式最多试仓
+            if good_setup and not false_break_risk and wr_half_ok:
+                return "可以試倉"
+            return "暫緩觀望"
+        if false_break_risk or shrink_fbo:
+            # 假突破 / 缩量假突破 → 最多试仓（进攻），防守已在上方挡满仓
+            if thr.key == "aggressive" and good_setup and wr_half_ok and rr_ok:
                 return "可以試倉"
             return "暫緩觀望"
         if block_breakout_chase and not good_setup:
             pass
-        if (good_setup or bias_score >= 10) and trend_ok and not false_break_risk:
+        if (good_setup or bias_score >= 10) and trend_ok:
             return "可以試倉"
-        if entry_opp in ("观望",) and bias_score >= 18 and trend_ok:
+        if entry_opp in ("观望",) and bias_score >= 18 and trend_ok and wr_half_ok:
             return "可以試倉"
     return "暫緩觀望"
+
+
+def aggressive_upgrade_1r(
+    *,
+    wr: float | None,
+    bias_label: str,
+    bias_score: float,
+    multi_rs_score: float | None,
+    vol_label: str,
+    false_break_risk: bool,
+    rr_net: float | None,
+    rr: float | None,
+) -> tuple[bool, int, list[str]]:
+    """
+    进攻版升至 1R：至少满足 3 项（spec §5）。
+    """
+    hits: list[str] = []
+    if wr is not None and wr >= 52:
+        hits.append("路径胜率≥52%")
+    if ("强烈看多" in (bias_label or "")) or bias_score >= 50:
+        hits.append("Bias强烈看多/≥+50")
+    if multi_rs_score is None or multi_rs_score >= 40:
+        # 不得极弱：有分数则 ≥40；无数据视为不否决但也不算加分
+        if multi_rs_score is not None and multi_rs_score >= 40:
+            hits.append("相对强弱非极弱")
+        elif multi_rs_score is None:
+            pass
+    vol_ok = vol_label not in ("放量下跌",) and not (
+        false_break_risk and vol_label in ("缩量", "缩量回踩", "缩量整理")
+    )
+    if vol_ok and vol_label not in ("", "—"):
+        hits.append("量能非缩量假突破")
+    rr_use = rr_net if rr_net is not None else rr
+    if rr_use is not None and rr_use >= 1.0:
+        hits.append("净R:R≥1.0")
+    return len(hits) >= 3, len(hits), hits
 
 
 def _build_swing_plan(
@@ -399,7 +1024,14 @@ def _build_swing_plan(
     adx_trending: bool | None = None,
     adx_value: float | None = None,
     h1_ready: bool | None = None,
+    mode: ModeThresholds | None = None,
+    stability: float | None = None,
+    multi_rs_score: float | None = None,
+    day_wr: float | None = None,
+    high: pd.Series | None = None,
+    low: pd.Series | None = None,
 ) -> SwingHorizonPlan:
+    thr = mode or MODE_THRESHOLDS["defensive"]
     risk_ps = None
     reward_ps = None
     mid = entry_mid
@@ -410,19 +1042,53 @@ def _build_swing_plan(
     rr = None
     if risk_ps and reward_ps and risk_ps > 0:
         rr = reward_ps / risk_ps
-    wr = None
+
+    wr: float | None = None
+    wr_n: int | None = None
+    wr_src = "none"
+    wr_conf = "none"
+    ref_for_pct = float(mid) if mid is not None else (
+        float(display_limit) if display_limit else None
+    )
     if risk_ps and reward_ps and close is not None and len(close) > bars + 30:
-        wr = _path_win_rate(
-            close, risk_ps, reward_ps, lookback=100, horizon=bars
+        wr, wr_n, wr_src = resolve_path_win_rate(
+            close,
+            risk_ps,
+            reward_ps,
+            primary_horizon=bars,
+            day_wr=day_wr,
+            lookback=PATH_LOOKBACK_DEFAULT,
+            min_samples=MIN_SAMPLES_FULL,
+            high=high,
+            low=low,
+            ref_entry=ref_for_pct,
         )
+        wr_conf = path_wr_confidence(wr_src, wr_n)
+    wr_display = format_win_rate(wr, wr_n, confidence=wr_conf, source=wr_src)
+
+    # 滑点后 R:R / E[R]（可执行）— 先算，门檻优先用净 R:R
+    entry_ref = (
+        float(display_limit)
+        if display_limit
+        else (float(mid) if mid is not None else None)
+    )
+    slip = apply_long_slippage(
+        entry_ref, stop, target, win_rate_pct=wr, slip_pct=DEFAULT_SLIP_PCT
+    )
     exp_r = _expectancy_r(wr, rr)
+    # 净期望：有净 R:R 时用净
+    if slip.rr_net is not None and wr is not None:
+        exp_for_gate = _expectancy_r(wr, slip.rr_net)
+    else:
+        exp_for_gate = exp_r
+
     verdict = _swing_verdict(
         entry_opp=entry_opp,
         bias_label=bias_label,
         bias_score=bias_score,
         wr=wr,
         rr=rr,
-        exp_r=exp_r,
+        exp_r=exp_for_gate if exp_for_gate is not None else exp_r,
         price_far_chase=price_far_chase,
         vol_label=vol_label,
         false_break_risk=false_break_risk,
@@ -434,10 +1100,17 @@ def _build_swing_plan(
         adx_trending=adx_trending,
         adx_value=adx_value,
         h1_ready=h1_ready,
+        mode=thr,
+        stability=stability,
+        multi_rs_score=multi_rs_score,
+        rr_net=slip.rr_net,
+        wr_confidence=wr_conf,
     )
-    note_bits = []
+    note_bits = [f"模式{thr.label}"]
     if wr is not None:
-        note_bits.append(f"历史路径约{bars}个交易日内先到目标再触止蚀的比例")
+        note_bits.append(f"路径胜率{wr_display}（{wr_src}）")
+    else:
+        note_bits.append(wr_display)
     if rr is not None:
         note_bits.append(f"R:R≈{rr:.2f}")
     if exp_r is not None:
@@ -446,16 +1119,6 @@ def _build_swing_plan(
         note_bits.append("1H可掛單")
     elif h1_ready is False:
         note_bits.append("等1H/回踩")
-
-    # 滑点后 R:R / E[R]（可执行）
-    entry_ref = (
-        float(display_limit)
-        if display_limit
-        else (float(mid) if mid is not None else None)
-    )
-    slip = apply_long_slippage(
-        entry_ref, stop, target, win_rate_pct=wr, slip_pct=DEFAULT_SLIP_PCT
-    )
     if slip.rr_net is not None:
         note_bits.append(f"净R:R≈{slip.rr_net:.2f}")
 
@@ -480,21 +1143,56 @@ def _build_swing_plan(
         rr_net=slip.rr_net,
         expectancy_net=slip.exp_net,
         slip_note=slip.note,
+        win_rate_samples=wr_n,
+        win_rate_source=wr_src,
+        win_rate_display=wr_display,
     )
 
 
-# ---- Profit-focused hard floors (raise only if you accept worse expectancy) ----
-# 适合入场：赔率+期望值都要过线，避免「高胜率低赔率」假好票
-MIN_RR_FULL = 1.35
-MIN_RR_CAUTIOUS = 1.05
-MIN_EXP_FULL = 0.12
+# ---- Legacy soft floors for _enter_decision ranking (score only) ----
+# 真正做不做以 swing 双模式门檻为准；下列常数仅用于综合分硬挡极端情况
+MIN_RR_FULL = 1.20
+MIN_RR_CAUTIOUS = 0.95
+MIN_EXP_FULL = 0.10
 MIN_EXP_CAUTIOUS = 0.0
 MIN_WR_FULL = 52.0
-MIN_STAB_FULL = 48.0
-MIN_STAB_CAUTIOUS = 30.0
+MIN_STAB_FULL = 45.0
+MIN_STAB_CAUTIOUS = 25.0
 MIN_REGIME_FULL = 48.0
 MIN_LIQ_FULL = 42.0
 MIN_RS_FULL = 42.0
+
+
+def resolve_trading_mode(
+    requested: str | None,
+    *,
+    regime_score: float | None = None,
+    vix_label: str = "",
+    force_defensive: bool = False,
+) -> tuple[ModeThresholds, bool, str]:
+    """
+    Pick A/B mode. Force defensive when market weak / VIX elevated / caller says so.
+    Returns (thresholds, forced, note).
+    """
+    thr = get_mode_thresholds(requested or "defensive")
+    notes: list[str] = []
+    forced = False
+    if force_defensive and thr.key != "defensive":
+        thr = MODE_THRESHOLDS["defensive"]
+        forced = True
+        notes.append("连续亏损/日亏达限：强制 A 防守版")
+    high_vix = any(k in (vix_label or "") for k in ("高", "极高", "elevated", "high"))
+    if thr.key == "aggressive":
+        if regime_score is not None and regime_score < 40:
+            thr = MODE_THRESHOLDS["defensive"]
+            forced = True
+            notes.append("大盘转弱：强制切回 A 防守版")
+        elif high_vix:
+            thr = MODE_THRESHOLDS["defensive"]
+            forced = True
+            notes.append("VIX 偏高：强制切回 A 防守版")
+    note = "；".join(notes)
+    return thr, forced, note
 
 
 def _enter_decision(
@@ -705,12 +1403,17 @@ def build_trade_sop(
     capital: float = 50_000.0,
     risk_pct: float = 1.0,
     primary_horizon: str = "h1",
+    mode: str = "defensive",
+    force_defensive: bool = False,
 ) -> TradeSOP:
     """
     Full SOP for one symbol (short-term swing playbook).
 
     primary_horizon: ``h1`` = 0–2周（默认）, ``h2`` = 2–4周
     — 决定 enter_ok / 出场纪律 / 主展示计划。
+
+    mode: ``defensive`` (A 防守版) | ``aggressive`` (B 进攻版)
+    force_defensive: 连续亏损等场景由 UI/日志强制 A
     """
     sym = normalize_symbol(symbol)
     info = cached_info(sym, cache_bucket(5))
@@ -746,6 +1449,9 @@ def build_trade_sop(
             actions_now=["检查代码 / 网络 / 稍后再试"],
             summary="无法拉取历史数据，SOP 不可用。",
             period=period,
+            mode=get_mode_thresholds(mode).key,
+            mode_label=get_mode_thresholds(mode).label,
+            win_rate_display="样本不足",
         )
 
     df = enrich(hist)
@@ -903,34 +1609,44 @@ def build_trade_sop(
     if risk_ps and reward_ps and risk_ps > 0:
         rr = reward_ps / risk_ps
 
-    # 路径用已收盘日线（去掉未完成当日 bar）
-    close_for_path = df["Close"]
-    if len(close_for_path) >= 40:
+    # 路径用已收盘日线（去掉未完成当日 bar）+ High/Low 触价
+    path_df = df
+    if len(path_df) >= 40:
         try:
             from market_session import us_session_clock
 
             sess = us_session_clock().session
             if sess in ("pre_market", "rth", "after_hours", "overnight"):
-                close_for_path = close_for_path.iloc[:-1]
+                path_df = path_df.iloc[:-1]
         except Exception:
             pass
+    close_for_path = path_df["Close"]
+    high_for_path = path_df["High"] if "High" in path_df.columns else None
+    low_for_path = path_df["Low"] if "Low" in path_df.columns else None
 
+    # 路径胜率 + fallback（% 缩放 / HL / 低样本分档）— 全局摘要用 0–2 周
+    day_wr = getattr(risk, "win_rate_pct", None)
+    wr_samples: int | None = None
+    wr_source = "none"
     path_wr = None
     if risk_ps and reward_ps:
-        path_wr = _path_win_rate(
-            close_for_path, risk_ps, reward_ps, lookback=100, horizon=10
+        path_wr, wr_samples, wr_source = resolve_path_win_rate(
+            close_for_path,
+            risk_ps,
+            reward_ps,
+            primary_horizon=10,
+            day_wr=day_wr,
+            lookback=PATH_LOOKBACK_DEFAULT,
+            min_samples=MIN_SAMPLES_FULL,
+            high=high_for_path,
+            low=low_for_path,
+            ref_entry=float(entry_plan) if entry_plan else None,
         )
-
-    # Blend path WR with daily up-win rate (path more relevant for stops/targets)
-    day_wr = getattr(risk, "win_rate_pct", None)
-    if path_wr is not None and day_wr is not None:
-        win_rate = 0.70 * path_wr + 0.30 * float(day_wr)
-    elif path_wr is not None:
-        win_rate = path_wr
-    elif day_wr is not None:
-        win_rate = float(day_wr)
-    else:
-        win_rate = None
+    win_rate = path_wr  # 已含 day / blend fallback
+    wr_conf_global = path_wr_confidence(wr_source, wr_samples)
+    wr_display = format_win_rate(
+        win_rate, wr_samples, confidence=wr_conf_global, source=wr_source
+    )
 
     if win_rate is not None:
         if win_rate >= 58:
@@ -940,7 +1656,7 @@ def build_trade_sop(
         else:
             wr_label = "低"
     else:
-        wr_label = "—"
+        wr_label = "样本不足"
 
     exp_r = _expectancy_r(win_rate, rr)
 
@@ -966,7 +1682,17 @@ def build_trade_sop(
     trend_lab = getattr(trend_al, "label", "") if trend_al else ""
     trend_sc = getattr(trend_al, "score", None) if trend_al else None
 
-    # 双周期短线计划（主输出）
+    stab, stab_label = _stability_score(risk, trend, bias.score)
+
+    # 双模式：A 防守 / B 进攻（大盘弱/VIX 高强制 A）
+    mode_thr, mode_forced, mode_note = resolve_trading_mode(
+        mode,
+        regime_score=getattr(regime, "score", None) if regime else None,
+        vix_label=str(getattr(regime, "vix_label", "") or "") if regime else "",
+        force_defensive=force_defensive,
+    )
+
+    # 双周期短线计划（主输出）— 门檻按 mode
     _mtf_kw = dict(
         false_break_risk=fbo_risk,
         block_breakout_chase=fbo_block,
@@ -977,6 +1703,12 @@ def build_trade_sop(
         adx_trending=adx_trending,
         adx_value=adx_val,
         h1_ready=h1_ready,
+        mode=mode_thr,
+        stability=stab,
+        multi_rs_score=multi_rs.get("score"),
+        day_wr=float(day_wr) if day_wr is not None else None,
+        high=high_for_path,
+        low=low_for_path,
     )
     swing_h1 = _build_swing_plan(
         key="h1",
@@ -1015,14 +1747,14 @@ def build_trade_sop(
         **_mtf_kw,
     )
     trend_note = (
-        f"走势：{bias.bias}（{bias.score:+.0f}）· 入场 {entry.opportunity}· "
+        f"模式 {mode_thr.label}"
+        + (f"（强制）" if mode_forced else "")
+        + f" · 走势：{bias.bias}（{bias.score:+.0f}）· 入场 {entry.opportunity}· "
         f"周线 {getattr(weekly, 'label', '—') if weekly else '—'}· "
         f"ADX {getattr(adx_r, 'label', '—') if adx_r else '—'}· "
         f"1H {getattr(h1_r, 'label', '—') if h1_r else '—'}· "
         f"跟势 {trend_lab or '—'}· 假突破 {getattr(fbo, 'label', '—') if fbo else '—'}"
     )
-
-    stab, stab_label = _stability_score(risk, trend, bias.score)
     # 综合风控分仍计算；最终「做不做」以短线 0–2 周波段结论为准（你的持仓周期）
     _, enter_score, _ = _enter_decision(
         entry.opportunity,
@@ -1079,11 +1811,14 @@ def build_trade_sop(
         "回避": min(enter_score, 35.0),
     }.get(enter_ok, enter_score)
 
-    # 出场纪律（主周期）
+    # 出场纪律（主周期）— 持有天数按模式
+    max_hold = (
+        mode_thr.max_hold_h1 if primary.key == "h1" else mode_thr.max_hold_h2
+    )
     exit_pl = build_exit_plan(
         horizon_key=primary.key,
         horizon_label=primary.label,
-        max_hold_days=primary.bars,
+        max_hold_days=max_hold,
         entry=primary.entry_plan or entry_plan,
         stop=primary.stop_loss or stop,
         t1=primary.target,
@@ -1098,20 +1833,43 @@ def build_trade_sop(
         slip_pct=DEFAULT_SLIP_PCT,
     )
 
-    # Position: 谨慎试仓强制 0.5R；观望/回避仍给「若强行」参考仓但标注
+    # 仓位 R 数：防守满仓默认 1R；进攻满仓默认 0.5R，≥3 项加分可升 1R
+    upgrade_1r = False
+    upgrade_hits = 0
+    upgrade_notes: list[str] = []
+    risk_units = 0.0
+    if enter_ok == "适合入场":
+        if mode_thr.key == "aggressive":
+            upgrade_1r, upgrade_hits, upgrade_notes = aggressive_upgrade_1r(
+                wr=primary.win_rate_pct,
+                bias_label=bias.bias,
+                bias_score=bias.score,
+                multi_rs_score=multi_rs.get("score"),
+                vol_label=vol_label,
+                false_break_risk=fbo_risk,
+                rr_net=primary.rr_net,
+                rr=primary.rr,
+            )
+            risk_units = 1.0 if upgrade_1r else mode_thr.default_risk_units_full
+        else:
+            risk_units = mode_thr.default_risk_units_full  # 1.0
+    elif enter_ok == "谨慎试仓":
+        risk_units = 0.5
+    else:
+        risk_units = 0.0
+
     lot = suggest_lot_size(sym)
-    # 仓位按结构中位；若已在区内可用 display_limit 作为更贴近的限价参考
     plan_entry = float(display_limit if in_zone else (entry_plan or last))
     plan_stop = float(stop or last * 0.97)
-    if enter_ok == "适合入场":
+    if risk_units >= 0.99:
         eff_risk_pct = float(risk_pct)
-        risk_tag = "1R"
-    elif enter_ok == "谨慎试仓":
+        risk_tag = f"1R·{mode_thr.label}"
+    elif risk_units >= 0.4:
         eff_risk_pct = float(risk_pct) * 0.5
-        risk_tag = "0.5R"
+        risk_tag = f"0.5R·{mode_thr.label}"
     else:
         eff_risk_pct = float(risk_pct)
-        risk_tag = "参考1R(SOP不建议开)"
+        risk_tag = f"参考1R(SOP不建议开)·{mode_thr.label}"
     pos = calc_position(
         capital=capital,
         risk_pct=eff_risk_pct,
@@ -1133,6 +1891,15 @@ def build_trade_sop(
         )
         if enter_ok == "谨慎试仓":
             pos_note += " · 半仓试错，到 T1 先减半"
+        if mode_thr.key == "aggressive" and enter_ok == "适合入场":
+            if upgrade_1r:
+                pos_note += f" · 进攻升1R（{upgrade_hits}/5：{'、'.join(upgrade_notes)}）"
+            else:
+                pos_note += (
+                    f" · 进攻默认0.5R（加分{upgrade_hits}/5，需≥3才升1R）"
+                )
+        if mode_forced and mode_note:
+            pos_note += f" · {mode_note}"
 
     # Checklist
     checklist: list[dict[str, str]] = []
@@ -1163,29 +1930,89 @@ def build_trade_sop(
             "detail": f"{stab_label}（{stab:.0f}/100）· 风险等级 {getattr(risk, 'risk_level', '—')}",
         }
     )
-    if win_rate is not None:
+    checklist.append(
+        {
+            "name": f"模式",
+            "status": "pass" if not mode_forced else "warn",
+            "detail": (
+                f"{mode_thr.label}（{mode_thr.key}）"
+                + (f" · {mode_note}" if mode_note else "")
+                + f" · 满仓胜率≥{mode_thr.wr_full:.0f}% · 试仓≥{mode_thr.wr_half:.0f}%"
+                + f" · 净R:R≥{mode_thr.rr_full:.2f}/{mode_thr.rr_half:.2f}"
+            ),
+        }
+    )
+    prim_wr = primary.win_rate_pct
+    prim_src = getattr(primary, "win_rate_source", "") or wr_source
+    prim_n = getattr(primary, "win_rate_samples", None)
+    prim_conf = path_wr_confidence(prim_src, prim_n)
+    prim_disp = getattr(primary, "win_rate_display", None) or format_win_rate(
+        prim_wr, prim_n, confidence=prim_conf, source=prim_src
+    )
+    if prim_wr is not None:
+        if prim_conf == "full" and prim_wr >= mode_thr.wr_full:
+            wr_status = "pass"
+        elif prim_wr >= mode_thr.wr_half:
+            wr_status = "warn"  # 低样本/day/blend 或未达满仓线
+        else:
+            wr_status = "fail"
+        conf_tip = {
+            "full": "样本充足可支撑满仓",
+            "low": "低样本：最多试仓",
+            "blend": "路径+日线混合：最多试仓",
+            "day": "日线估算：最多试仓",
+        }.get(prim_conf, "")
         checklist.append(
             {
                 "name": "路径胜率",
-                "status": "pass"
-                if win_rate >= 55
-                else ("warn" if win_rate >= 48 else "fail"),
-                "detail": f"约 {win_rate:.0f}%（历史：先到 T1 再触止损 的比例，混合日线胜率）",
-            }
-        )
-    if rr is not None:
-        checklist.append(
-            {
-                "name": "盈亏比 R:R",
-                "status": "pass"
-                if rr >= MIN_RR_FULL
-                else ("warn" if rr >= MIN_RR_CAUTIOUS else "fail"),
+                "status": wr_status,
                 "detail": (
-                    f"T1 R:R ≈ {rr:.2f} · 满仓需≥{MIN_RR_FULL} · 试仓需≥{MIN_RR_CAUTIOUS}"
-                    + (" · 不足则禁止开多" if rr < MIN_RR_CAUTIOUS else "")
+                    f"{prim_disp} · 来源 {prim_src}"
+                    f" · %缩放+High/Low · {conf_tip}"
                 ),
             }
         )
+    else:
+        checklist.append(
+            {
+                "name": "路径胜率",
+                "status": "fail",
+                "detail": f"{prim_disp} · 不得按高胜率开仓",
+            }
+        )
+    rr_show = primary.rr_net if primary.rr_net is not None else (
+        primary.rr if primary.rr is not None else rr
+    )
+    if rr_show is not None:
+        checklist.append(
+            {
+                "name": "盈亏比 R:R（净优先）",
+                "status": "pass"
+                if rr_show >= mode_thr.rr_full
+                else ("warn" if rr_show >= mode_thr.rr_half else "fail"),
+                "detail": (
+                    f"≈ {rr_show:.2f} · 满仓净R:R≥{mode_thr.rr_full:.2f} · "
+                    f"试仓≥{mode_thr.rr_half:.2f}"
+                    + (
+                        " · 不足则禁止开多"
+                        if rr_show < mode_thr.rr_half
+                        else ""
+                    )
+                ),
+            }
+        )
+    checklist.append(
+        {
+            "name": "稳定度（模式门檻）",
+            "status": "pass"
+            if stab >= mode_thr.stab_full
+            else ("warn" if stab >= mode_thr.stab_half else "fail"),
+            "detail": (
+                f"{stab_label}（{stab:.0f}/100）· "
+                f"满仓≥{mode_thr.stab_full:.0f} · 试仓≥{mode_thr.stab_half:.0f}"
+            ),
+        }
+    )
     if price_above_zone or price_far_chase:
         checklist.append(
             {
@@ -1442,24 +2269,32 @@ def build_trade_sop(
     # 摘要以「主周期」为准
     h1v = swing_h1.verdict
     h2v = swing_h2.verdict
+    wr_txt = getattr(primary, "win_rate_display", None) or format_win_rate(
+        primary.win_rate_pct, getattr(primary, "win_rate_samples", None)
+    )
     summary = (
-        f"{sym} 现价 **{last:.2f}** · 主周期 **{primary.label}** → **{primary.verdict}**。\n\n"
+        f"{sym} 现价 **{last:.2f}** · **{mode_thr.label}** · "
+        f"主周期 **{primary.label}** → **{primary.verdict}**"
+        f"（{risk_tag}）。\n\n"
         f"{trend_note}\n\n"
         f"**主计划**：入场 {primary.entry_low}–{primary.entry_high}，"
         f"止蚀 {primary.stop_loss}，目标 {primary.target}，"
-        f"胜率 {primary.win_rate_pct}% · 纸面R:R {primary.rr} · "
+        f"胜率 {wr_txt} · 纸面R:R {primary.rr} · "
         f"净R:R {primary.rr_net}。\n"
         f"出场：{exit_pl.summary}\n"
         f"（对照 0–2周={h1v} / 2–4周={h2v}）{reg_bit}"
     )
 
     notes = [
+        f"模式={mode_thr.label}（日志必须记录）"
+        + (f" · {mode_note}" if mode_note else ""),
         f"主周期={primary.label}：决定做不做、出场纪律、滑点后R:R",
-        "短线波段：0–2周≈10交易日；2–4周≈20交易日",
-        "胜率=历史路径（先到目标再触止蚀），非实盘保证",
+        f"时间止损：本模式最多 {max_hold} 个交易日",
+        "胜率=历史路径（%缩放+High/Low）· ≥12满仓 · 8–11低样本最多试仓 · day/blend估算",
         f"滑点假设单边 {DEFAULT_SLIP_PCT * 100:.2f}%：净R:R更接近可成交",
         "出场硬规则：T1减半 → 止蚀保本 → 时间止损 → 破止蚀全出",
-        "限价入场区内，不追高；成交后写交易日志对照真胜率",
+        "禁止：追高、摊平、扩大止损、无止损进场、逆势硬做",
+        "限价入场区内；成交后写交易日志（含模式 A/B）对照真胜率",
         f"区间报酬 {rets.get('total_return_pct'):.1f}%，年化波动 {rets.get('volatility_pct'):.1f}%"
         if rets.get("total_return_pct") is not None and rets.get("volatility_pct") is not None
         else "数据仅供实盘辅助",
@@ -1479,6 +2314,34 @@ def build_trade_sop(
     elif status.get("finnhub") and news and getattr(news, "available", False) and "AlphaVantage" not in data_sources:
         data_sources.append("Finnhub")
 
+    # 一屏决策摘要（结论 + 根据 + 主风险）
+    prim_src_brief = getattr(primary, "win_rate_source", "") or wr_source
+    prim_n_brief = getattr(primary, "win_rate_samples", None)
+    if prim_n_brief is None:
+        prim_n_brief = wr_samples
+    decision_brief = build_decision_brief(
+        verdict=primary.verdict,
+        mode_label=mode_thr.label,
+        wr_display=wr_txt,
+        wr_confidence=path_wr_confidence(prim_src_brief, prim_n_brief),
+        rr_net=primary.rr_net,
+        rr_paper=primary.rr,
+        exp_r=primary.expectancy_net
+        if primary.expectancy_net is not None
+        else primary.expectancy_r,
+        risk_units=float(risk_units),
+        bias_label=bias.bias,
+        bias_score=float(bias.score),
+        price_far_chase=bool(price_far_chase),
+        false_break_risk=bool(fbo_risk),
+        against_trend=bool(against_tr),
+        weekly_allow_long=bool(weekly_allow),
+        vol_label=vol_label or "",
+        mode_forced=bool(mode_forced),
+        mode_note=mode_note or "",
+        thr=mode_thr,
+    )
+
     return TradeSOP(
         symbol=sym,
         name=str(name),
@@ -1495,6 +2358,20 @@ def build_trade_sop(
         if primary.win_rate_pct is not None
         else (round(win_rate, 1) if win_rate is not None else None),
         win_rate_label=wr_label,
+        mode=mode_thr.key,
+        mode_label=mode_thr.label,
+        mode_forced=mode_forced,
+        mode_note=mode_note,
+        win_rate_samples=getattr(primary, "win_rate_samples", None)
+        if getattr(primary, "win_rate_samples", None) is not None
+        else wr_samples,
+        win_rate_source=getattr(primary, "win_rate_source", "") or wr_source,
+        win_rate_display=wr_txt,
+        risk_units=float(risk_units),
+        upgrade_1r=bool(upgrade_1r),
+        upgrade_hits=int(upgrade_hits),
+        upgrade_notes=list(upgrade_notes),
+        decision_brief=decision_brief,
         stability_score=stab,
         stability_label=stab_label,
         side=side,

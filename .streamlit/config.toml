@@ -8,8 +8,12 @@ font = "sans serif"
 
 [server]
 headless = true
+# Streamlit invariant: if enableCORS=false, XSRF must also be false.
+# (XSRF cookies need allowable origins → forces CORS on.)
+# Use false/false for LAN / phone / Docker / reverse-proxy access.
+# For pure localhost-only and max CSRF safety, set both to true.
 enableCORS = false
-enableXsrfProtection = true
+enableXsrfProtection = false
 
 [browser]
 gatherUsageStats = false
