@@ -230,10 +230,27 @@ def render_sop(
             s1, s2, s3 = st.columns(3)
             s1.metric("纸面 R:R", _fmt(slip.rr_paper))
             s2.metric("净 R:R", _fmt(slip.rr_net))
-            s3.metric("净 E[R]", f"{slip.exp_net:+.2f}" if slip.exp_net is not None else "—")
+            if getattr(primary, "win_rate_pct", None) is None and (
+                not getattr(primary, "win_rate_display", "")
+                or "样本不足" in str(getattr(primary, "win_rate_display", ""))
+            ):
+                s3.metric("净 E[R]", "—")
+                st.caption("样本不足时 E[R] 不估算（避免假负期望）。")
+            else:
+                s3.metric(
+                    "净 E[R]",
+                    f"{slip.exp_net:+.2f}" if slip.exp_net is not None else "—",
+                )
             st.caption(slip.note)
         if primary and primary.expectancy_r is not None:
-            st.caption(f"纸面 E[R]={primary.expectancy_r:+.2f}")
+            st.caption(
+                f"纸面 E[R]={primary.expectancy_r:+.2f} "
+                f"（门檻用纸面；滑点只在净R:R扣一次）"
+            )
+        st.caption(
+            "E[R]≈ 胜率×赔率 − (1−胜率)×1。"
+            "胜率低 + 赔率不够高 → E[R] 为负是数学结果，不是显示错误。"
+        )
 
     with st.expander("辅助信号（周线/1H/ADX/假突破/跟势/量能）", expanded=False):
         r1, r2, r3, r4 = st.columns(4)
@@ -333,9 +350,11 @@ def render_sop(
     with st.expander("模型说明", expanded=False):
         st.markdown(
             """
-- **模式 A 防守**：胜率≥55%/50%，净R:R≥1.2，E[R]≥0.15，稳定度≥45  
-- **模式 B 进攻**：胜率≥52%/48%，净R:R≥1.0，默认 0.5R，≥3 项加分可升 1R  
-- **路径胜率**：历史先到目标再触止损；样本&lt;12 显示「样本不足」（禁止当高胜率）  
+- **入場裁决（实验）**：主要看 **技术路径胜率%**（满仓/试仓线按 A/B 模式）；**样本数只显示、不挡门**  
+- **模式 A**：胜率满仓≥52% / 试仓≥48%  
+- **模式 B**：胜率满仓≥50% / 试仓≥45%；默认 0.5R  
+- **仍硬挡**：追高、强烈看空、放量下跌；假突破/周线空/逆势 → 最多试仓  
+- **路径胜率**：历史 K 线先到目标再触止损的比例；有 1 笔结算即可出 %  
 - **主周期**决定做不做、出场、净R:R  
 - **胜率**＝历史路径先到目标再触止蚀（非保证）  
 - **净R:R**＝扣约 0.15% 单边滑点  

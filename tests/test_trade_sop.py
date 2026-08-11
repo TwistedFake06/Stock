@@ -173,7 +173,11 @@ class TestTradeSOPHelpers(unittest.TestCase):
         if wr is not None:
             self.assertTrue(0 <= wr <= 100)
 
-    def test_low_sample_blocks_full_entry(self):
+    def test_wr_only_ignores_sample_confidence(self):
+        """ENTRY_BY_WR_ONLY：低样本 conf 不挡满仓，只看胜率%。"""
+        from trade_sop import ENTRY_BY_WR_ONLY
+
+        self.assertTrue(ENTRY_BY_WR_ONLY)
         v = _swing_verdict(
             entry_opp="较佳入场",
             bias_label="看多",
@@ -189,17 +193,32 @@ class TestTradeSOPHelpers(unittest.TestCase):
             weekly_allow_long=True,
             rr_net=1.25,
             vol_label="放量上涨",
-            wr_confidence="low",
+            wr_confidence="low",  # 以前会挡满仓
         )
-        self.assertNotEqual(v, "可以入場")
-        self.assertIn(v, ("可以試倉", "暫緩觀望"))
+        self.assertEqual(v, "可以入場")
+
+    def test_wr_only_half_band(self):
+        v = _swing_verdict(
+            entry_opp="观望",
+            bias_label="中性",
+            bias_score=0,
+            wr=49,  # A 试仓线 48，满仓 52
+            rr=0.8,
+            exp_r=-0.2,
+            price_far_chase=False,
+            mode=MODE_THRESHOLDS["defensive"],
+            wr_confidence="none",
+        )
+        self.assertEqual(v, "可以試倉")
 
     def test_mode_thresholds(self):
         d = get_mode_thresholds("defensive")
         a = get_mode_thresholds("B")
-        self.assertEqual(d.wr_full, 55.0)
+        self.assertEqual(d.wr_full, 52.0)  # 中鬆
+        self.assertEqual(d.rr_full, 1.10)
         self.assertEqual(a.key, "aggressive")
-        self.assertEqual(a.wr_half, 48.0)
+        self.assertEqual(a.wr_full, 50.0)
+        self.assertEqual(a.wr_half, 45.0)
         self.assertEqual(a.default_risk_units_full, 0.5)
 
     def test_decision_brief_has_verdict_and_reasons(self):
@@ -475,7 +494,8 @@ class TestTradeSOPHelpers(unittest.TestCase):
             price_far_chase=False,
             false_break_risk=True,
         )
-        self.assertEqual(v, "暫緩觀望")
+        # WR-only 模式：假突破最多试仓，不允许满仓
+        self.assertEqual(v, "可以試倉")
 
     def test_swing_blocks_against_trend(self):
         v = _swing_verdict(
@@ -490,7 +510,8 @@ class TestTradeSOPHelpers(unittest.TestCase):
             trend_label="逆势",
             trend_score=35,
         )
-        self.assertEqual(v, "暫緩觀望")
+        # WR-only：逆势不许满仓，高胜率最多试仓
+        self.assertEqual(v, "可以試倉")
 
     def test_trend_align_offline(self):
         n = 80

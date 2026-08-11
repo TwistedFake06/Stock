@@ -219,18 +219,24 @@ class ModeThresholds:
     default_risk_units_full: float  # 满仓默认 R（进攻版默认 0.5，达加分再升 1）
 
 
+# 门檻档位：中鬆（2026-08）
+# 入場裁決實驗：ENTRY_BY_WR_ONLY=True → 主要用技术路径胜率% 决定可否入場，
+# 不再因「样本不足/低样本」降级；样本数仅作显示。极端风险仍硬挡。
+ENTRY_BY_WR_ONLY = True
+MIN_PATH_SAMPLES_FOR_RATE = 1  # 有 1 笔已结算路径即可给出胜率%
+
 MODE_THRESHOLDS: dict[str, ModeThresholds] = {
     "defensive": ModeThresholds(
         key="defensive",
         label="A 防守版",
-        wr_full=55.0,
-        wr_half=50.0,
+        wr_full=52.0,
+        wr_half=48.0,
         stab_full=45.0,
-        stab_half=40.0,
-        rr_full=1.20,
-        rr_half=1.00,
-        exp_full=0.15,
-        exp_half=0.05,
+        stab_half=38.0,
+        rr_full=1.10,
+        rr_half=0.95,
+        exp_full=0.12,
+        exp_half=0.03,
         max_hold_h1=12,
         max_hold_h2=20,
         default_risk_units_full=1.0,
@@ -238,13 +244,13 @@ MODE_THRESHOLDS: dict[str, ModeThresholds] = {
     "aggressive": ModeThresholds(
         key="aggressive",
         label="B 进攻版",
-        wr_full=52.0,
-        wr_half=48.0,
+        wr_full=50.0,
+        wr_half=45.0,
         stab_full=25.0,
-        stab_half=25.0,
+        stab_half=22.0,
         rr_full=1.00,
-        rr_half=0.95,
-        exp_full=0.10,
+        rr_half=0.90,
+        exp_full=0.08,
         exp_half=0.0,
         max_hold_h1=10,
         max_hold_h2=15,
@@ -499,41 +505,36 @@ def resolve_path_win_rate(
     primary_horizon: int = 15,
     day_wr: float | None = None,
     lookback: int = PATH_LOOKBACK_DEFAULT,
-    min_samples: int = MIN_SAMPLES_FULL,
+    min_samples: int = MIN_PATH_SAMPLES_FOR_RATE,
     high: pd.Series | None = None,
     low: pd.Series | None = None,
     ref_entry: float | None = None,
 ) -> tuple[float | None, int | None, str]:
     """
-    Fallback chain (optimized):
-      1) % path + High/Low at primary / 15 / 20 / 30  (full if n≥12)
-      2) same with low sample n≥8 → source ``*_low``
-      3) path n≥5 blend 0.6*path + 0.4*day
-      4) day_wr only
-      5) None → 样本不足
+    技术路径胜率（% 缩放 + High/Low）：
+      1) 各 horizon 取有效结算样本最多的路径胜率（默认 n≥1 即给出 %）
+      2) 仍无路径时 fallback 日线上涨胜率 day_wr
+      3) 都无 → None
 
-    Returns (wr, samples_or_None, source).
-    Source encodes confidence: path_hN | path_hN_low | path_day_blend | day | none
+    样本数只写入 source/返回值供显示；是否入場由调用方按胜率%门檻决定（可忽略样本）。
     """
     horizons: list[int] = []
     for h in (int(primary_horizon), 15, 20, 30):
         if h > 0 and h not in horizons:
             horizons.append(h)
 
-    best_full: tuple[float, int, int] | None = None  # wr, n, h
-    best_low: tuple[float, int, int] | None = None
-    best_any: tuple[float, int, int] | None = None  # even n < 8 for blend
+    best: tuple[float, int, int] | None = None  # wr, n, h
     last_n = 0
+    floor = max(1, int(min_samples or MIN_PATH_SAMPLES_FOR_RATE))
 
     for h in horizons:
-        # Prefer pct+HL; min_samples=LOW so we get rate back for tiering
         wr, n = _path_win_rate_detail(
             close,
             risk_per_share,
             reward_per_share,
             lookback=lookback,
             horizon=h,
-            min_samples=MIN_SAMPLES_LOW,
+            min_samples=floor,
             high=high,
             low=low,
             ref_entry=ref_entry,
@@ -541,44 +542,18 @@ def resolve_path_win_rate(
         )
         last_n = max(last_n, n)
         if wr is None:
-            # still capture raw n via min_samples=1 for blend pool
-            wr1, n1 = _path_win_rate_detail(
-                close,
-                risk_per_share,
-                reward_per_share,
-                lookback=lookback,
-                horizon=h,
-                min_samples=1,
-                high=high,
-                low=low,
-                ref_entry=ref_entry,
-                scale="pct",
-            )
-            last_n = max(last_n, n1)
-            if wr1 is not None and n1 >= MIN_SAMPLES_BLEND:
-                if best_any is None or n1 > best_any[1]:
-                    best_any = (float(wr1), int(n1), h)
             continue
+        # 优先样本更多的窗口；样本相同取胜率更高者
+        if best is None or n > best[1] or (n == best[1] and wr > best[0]):
+            best = (float(wr), int(n), h)
 
-        if n >= min_samples:
-            if best_full is None or n > best_full[1]:
-                best_full = (float(wr), int(n), h)
-        elif n >= MIN_SAMPLES_LOW:
-            if best_low is None or n > best_low[1]:
-                best_low = (float(wr), int(n), h)
-        if n >= MIN_SAMPLES_BLEND:
-            if best_any is None or n > best_any[1]:
-                best_any = (float(wr), int(n), h)
+    if best is not None:
+        wr, n, h = best
+        tag = f"path_h{h}"
+        if n < MIN_SAMPLES_FULL:
+            tag = f"{tag}_n{n}"  # 标注样本少，但不阻止用 %
+        return round(wr, 1), n, tag
 
-    if best_full is not None:
-        wr, n, h = best_full
-        return round(wr, 1), n, f"path_h{h}"
-
-    if best_low is not None:
-        wr, n, h = best_low
-        return round(wr, 1), n, f"path_h{h}_low"
-
-    # Soft blend: partial path + day
     day_v: float | None = None
     if day_wr is not None:
         try:
@@ -587,11 +562,6 @@ def resolve_path_win_rate(
                 day_v = d
         except (TypeError, ValueError):
             day_v = None
-
-    if best_any is not None and day_v is not None:
-        wr, n, h = best_any
-        blended = 0.60 * wr + 0.40 * day_v
-        return round(blended, 1), n, f"path_day_blend_h{h}"
 
     if day_v is not None:
         return round(day_v, 1), None, "day"
@@ -856,31 +826,54 @@ def _swing_verdict(
         return "暫緩觀望"
     if vol_label == "放量下跌":
         return "暫緩觀望"
-    # 缩量假突破：进攻版直接降级（后面最多试仓）
+    # 缩量假突破标记（WR-only 时后面最多试仓，不在这里直接毙）
     shrink_fbo = false_break_risk and vol_label in ("缩量", "缩量回踩", "缩量整理")
-    if false_break_risk and thr.key == "defensive":
-        return "暫緩觀望"
-    if false_break_risk and thr.key == "aggressive" and not shrink_fbo:
-        # 进攻：假突破仍暂缓满仓路径
-        pass
-    if false_break_risk and thr.key == "aggressive":
-        # 不允许「可以入場」；试仓在下方处理
-        pass
-    if block_breakout_chase and price_far_chase:
-        return "暫緩觀望"
-    if against_trend and trend_label == "逆势":
-        return "暫緩觀望"
-    if adx_trending is False and adx_value is not None and adx_value < 18:
-        if entry_opp in ("较佳入场",) and block_breakout_chase:
+    if not ENTRY_BY_WR_ONLY:
+        if false_break_risk and thr.key == "defensive":
             return "暫緩觀望"
-    # 绝对地板：赔率/期望过差
-    if rr_gate is not None and rr_gate < 0.90:
-        return "暫緩觀望"
-    if exp_r is not None and exp_r < -0.08:
+        if block_breakout_chase and price_far_chase:
+            return "暫緩觀望"
+        if against_trend and trend_label == "逆势":
+            return "暫緩觀望"
+        if adx_trending is False and adx_value is not None and adx_value < 18:
+            if entry_opp in ("较佳入场",) and block_breakout_chase:
+                return "暫緩觀望"
+        # 绝对地板：赔率/期望过差
+        if rr_gate is not None and rr_gate < 0.90:
+            return "暫緩觀望"
+        if exp_r is not None and exp_r < -0.08:
+            return "暫緩觀望"
+
+    # —— 技术胜率门檻（不因样本 conf 降级）——
+    # wr_conf / 样本数仅用于展示；ENTRY_BY_WR_ONLY 时入場只看胜率%
+    wr_full_ok = wr is not None and wr >= thr.wr_full
+    wr_half_ok = wr is not None and wr >= thr.wr_half
+
+    if ENTRY_BY_WR_ONLY:
+        # 主裁决：技术路径胜率%；样本不参与。仍挡已在上方的极端风险。
+        if wr is None:
+            return "暫緩觀望"  # 完全算不出胜率
+        if false_break_risk or shrink_fbo:
+            # 假突破：最多试仓
+            if wr_half_ok:
+                return "可以試倉"
+            return "暫緩觀望"
+        if not weekly_allow_long:
+            if wr_half_ok:
+                return "可以試倉"
+            return "暫緩觀望"
+        if against_trend:
+            if wr_half_ok and wr >= thr.wr_full:
+                return "可以試倉"  # 逆势即使高胜率也不满仓
+            return "暫緩觀望"
+        if wr_full_ok:
+            return "可以入場"
+        if wr_half_ok:
+            return "可以試倉"
         return "暫緩觀望"
 
+    # —— 以下：旧多因子门檻（ENTRY_BY_WR_ONLY=False 时）——
     good_setup = entry_opp in ("较佳入场", "可关注")
-    # 相对强弱：进攻版不得极弱；防守版需同步或偏强
     rs_ok_full = multi_rs_score is None or multi_rs_score >= (
         48 if thr.key == "defensive" else 35
     )
@@ -889,14 +882,6 @@ def _swing_verdict(
     )
     stab_ok_full = stability is None or stability >= thr.stab_full
     stab_ok_half = stability is None or stability >= thr.stab_half
-    # 胜率：None=样本不足；full 才可满仓；low/day/blend 最多试仓
-    wr_full_ok = wr is not None and wr >= thr.wr_full and wr_conf == "full"
-    wr_half_ok = wr is not None and wr >= thr.wr_half and wr_conf in (
-        "full",
-        "low",
-        "blend",
-        "day",
-    )
     rr_good = rr_gate is not None and rr_gate >= thr.rr_full
     rr_ok = rr_gate is not None and rr_gate >= thr.rr_half
     exp_good = exp_r is not None and exp_r >= thr.exp_full
@@ -906,14 +891,12 @@ def _swing_verdict(
     trend_ok = trend_score is None or trend_score >= 48
     trend_good = trend_score is None or trend_score >= 60
     no_fbo = not false_break_risk
-    weekly_ok_full = weekly_allow_long  # 防守满仓要求周线允许多
+    weekly_ok_full = weekly_allow_long
     if thr.key == "aggressive":
-        weekly_ok_full = True  # 进攻满仓允许中性；空头在下面 cap 试仓
-
+        weekly_ok_full = True
     vol_ok_full = vol_label not in ("放量下跌",) and not (
         thr.key == "defensive" and vol_label in ("缩量假突破",)
     )
-    # 防守版量能需有确认（非放量下跌；偏好非缩量破位）
     if thr.key == "defensive" and vol_label in ("放量下跌", "缩量破位"):
         vol_ok_full = False
 
@@ -932,7 +915,7 @@ def _swing_verdict(
         and no_fbo
         and not block_breakout_chase
         and weekly_ok_full
-        and weekly_allow_long  # 周线空头永不「可以入場」
+        and weekly_allow_long
         and (adx_trending is not False or (adx_value is not None and adx_value >= 18))
         and not shrink_fbo
     ):
@@ -944,12 +927,10 @@ def _swing_verdict(
         if against_trend:
             return "暫緩觀望"
         if not weekly_allow_long:
-            # 周线空头：两模式最多试仓
             if good_setup and not false_break_risk and wr_half_ok:
                 return "可以試倉"
             return "暫緩觀望"
         if false_break_risk or shrink_fbo:
-            # 假突破 / 缩量假突破 → 最多试仓（进攻），防守已在上方挡满仓
             if thr.key == "aggressive" and good_setup and wr_half_ok and rr_ok:
                 return "可以試倉"
             return "暫緩觀望"
@@ -977,8 +958,8 @@ def aggressive_upgrade_1r(
     进攻版升至 1R：至少满足 3 项（spec §5）。
     """
     hits: list[str] = []
-    if wr is not None and wr >= 52:
-        hits.append("路径胜率≥52%")
+    if wr is not None and wr >= 50:
+        hits.append("路径胜率≥50%")
     if ("强烈看多" in (bias_label or "")) or bias_score >= 50:
         hits.append("Bias强烈看多/≥+50")
     if multi_rs_score is None or multi_rs_score >= 40:
@@ -1075,12 +1056,8 @@ def _build_swing_plan(
     slip = apply_long_slippage(
         entry_ref, stop, target, win_rate_pct=wr, slip_pct=DEFAULT_SLIP_PCT
     )
-    exp_r = _expectancy_r(wr, rr)
-    # 净期望：有净 R:R 时用净
-    if slip.rr_net is not None and wr is not None:
-        exp_for_gate = _expectancy_r(wr, slip.rr_net)
-    else:
-        exp_for_gate = exp_r
+    # 纸面 E[R]（展示用；ENTRY_BY_WR_ONLY 时不参与入場门檻）
+    exp_r = _expectancy_r(wr, rr) if wr is not None else None
 
     verdict = _swing_verdict(
         entry_opp=entry_opp,
@@ -1088,7 +1065,7 @@ def _build_swing_plan(
         bias_score=bias_score,
         wr=wr,
         rr=rr,
-        exp_r=exp_for_gate if exp_for_gate is not None else exp_r,
+        exp_r=exp_r,
         price_far_chase=price_far_chase,
         vol_label=vol_label,
         false_break_risk=false_break_risk,
@@ -1151,13 +1128,13 @@ def _build_swing_plan(
 
 # ---- Legacy soft floors for _enter_decision ranking (score only) ----
 # 真正做不做以 swing 双模式门檻为准；下列常数仅用于综合分硬挡极端情况
-MIN_RR_FULL = 1.20
-MIN_RR_CAUTIOUS = 0.95
+MIN_RR_FULL = 1.10
+MIN_RR_CAUTIOUS = 0.90
 MIN_EXP_FULL = 0.10
 MIN_EXP_CAUTIOUS = 0.0
-MIN_WR_FULL = 52.0
+MIN_WR_FULL = 50.0
 MIN_STAB_FULL = 45.0
-MIN_STAB_CAUTIOUS = 25.0
+MIN_STAB_CAUTIOUS = 22.0
 MIN_REGIME_FULL = 48.0
 MIN_LIQ_FULL = 42.0
 MIN_RS_FULL = 42.0
