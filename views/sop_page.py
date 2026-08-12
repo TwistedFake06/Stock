@@ -154,11 +154,49 @@ def render_sop(
     else:
         st.warning(sop.enter_ok)
 
-    # 决策摘要（自动：结论 + 根据 + 主风险）
-    brief = getattr(sop, "decision_brief", "") or ""
-    if brief:
-        st.markdown("#### 决策摘要")
-        st.info(brief)
+    # 三灯（位置 · 胜率 · 划算）
+    def _light_emoji(x: str) -> str:
+        return {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(x or "", "⚪")
+
+    pl = getattr(sop, "position_light", None)
+    wl = getattr(sop, "wr_light", None)
+    rl = getattr(sop, "rr_light", None)
+    if pl and wl and rl:
+        st.markdown("#### 三灯（位置 · 胜率 · 划算）")
+        t1, t2, t3 = st.columns(3)
+        t1.metric(
+            f"{_light_emoji(pl)} 位置",
+            {"green": "可挂/区内", "yellow": "略高", "red": "追高/远离"}.get(pl, pl),
+            getattr(sop, "position_light_note", "")[:40] or None,
+        )
+        t2.metric(
+            f"{_light_emoji(wl)} 胜率",
+            _wr_text(primary if primary else sop),
+            getattr(sop, "wr_light_note", "")[:40] or None,
+        )
+        t3.metric(
+            f"{_light_emoji(rl)} 划算",
+            _fmt(getattr(primary, "rr_net", None) if primary else None),
+            getattr(sop, "rr_light_note", "")[:40] or None,
+        )
+        win_h = getattr(sop, "pnl_if_win_hkd", None)
+        loss_h = getattr(sop, "pnl_if_loss_hkd", None)
+        notional = getattr(sop, "notional_hkd", 5000) or 5000
+        if win_h is not None or loss_h is not None:
+            st.caption(
+                f"按每笔 **{notional:.0f} HKD**：赚到目标约 "
+                f"**{('+' + f'{win_h:.0f}') if win_h is not None else '—'} HKD** · "
+                f"止损约 **{('-' + f'{loss_h:.0f}') if loss_h is not None else '—'} HKD**"
+            )
+
+    # 白话结果卡
+    card = getattr(sop, "plain_card", None) or getattr(sop, "decision_brief", "") or ""
+    if card:
+        st.markdown("#### 白话结果")
+        st.info(card)
+    one = getattr(sop, "one_liner_reason", "") or ""
+    if one:
+        st.caption(f"**主因：** {one}")
 
     # 核心 6 格
     k1, k2, k3, k4, k5, k6 = st.columns(6)
@@ -350,11 +388,14 @@ def render_sop(
     with st.expander("模型说明", expanded=False):
         st.markdown(
             """
-- **入場裁决（实验）**：主要看 **技术路径胜率%**（满仓/试仓线按 A/B 模式）；**样本数只显示、不挡门**  
-- **模式 A**：胜率满仓≥52% / 试仓≥48%  
+- **三灯裁决（默认）**：**位置** + **胜率** + **划算(净R:R)**  
+  - 三绿 → 可以入場；有黄无红 → 試倉；任一红 → 先别做  
+  - 强烈看空 / 放量下跌 → 不做多；假突破/周线空/逆势 → 最多試倉  
+- **模式 A**：胜率满仓≥52% / 试仓≥48%；净R:R 满仓≥1.10  
 - **模式 B**：胜率满仓≥50% / 试仓≥45%；默认 0.5R  
-- **仍硬挡**：追高、强烈看空、放量下跌；假突破/周线空/逆势 → 最多试仓  
-- **路径胜率**：历史 K 线先到目标再触止损的比例；有 1 笔结算即可出 %  
+- **每笔 5000 HKD**：白话卡显示赚到目标/止损大约多少钱  
+- **E/S/T**：计划限价=区中下（不追现价算R:R）；目标至少1:1；止损约0.6–1.5×ATR  
+- **路径胜率**：历史 K 线先到目标再触止损；样本数只作说明  
 - **主周期**决定做不做、出场、净R:R  
 - **胜率**＝历史路径先到目标再触止蚀（非保证）  
 - **净R:R**＝扣约 0.15% 单边滑点  

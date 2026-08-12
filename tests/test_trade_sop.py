@@ -30,11 +30,16 @@ from trade_sop import (
     _path_win_rate_detail,
     _stability_score,
     _swing_verdict,
+    THREE_LIGHT_SOP,
     aggressive_upgrade_1r,
     build_decision_brief,
+    cap_stop_by_atr,
+    decide_three_lights,
+    ensure_min_rr_target,
     format_win_rate,
     get_mode_thresholds,
     path_wr_confidence,
+    plan_limit_from_zone,
     resolve_path_win_rate,
     resolve_trading_mode,
 )
@@ -173,43 +178,74 @@ class TestTradeSOPHelpers(unittest.TestCase):
         if wr is not None:
             self.assertTrue(0 <= wr <= 100)
 
-    def test_wr_only_ignores_sample_confidence(self):
-        """ENTRY_BY_WR_ONLY：低样本 conf 不挡满仓，只看胜率%。"""
-        from trade_sop import ENTRY_BY_WR_ONLY
+    def test_plan_limit_zone_mid_lower(self):
+        e = plan_limit_from_zone(100.0, 110.0, frac=0.35)
+        self.assertIsNotNone(e)
+        assert e is not None
+        self.assertAlmostEqual(e, 103.5, places=2)
 
-        self.assertTrue(ENTRY_BY_WR_ONLY)
-        v = _swing_verdict(
+    def test_cap_stop_atr_and_min_target(self):
+        # stop too wide vs ATR
+        s, note = cap_stop_by_atr(100.0, 90.0, atr=2.0, cap_mult=1.5, floor_mult=0.6)
+        self.assertIsNotNone(s)
+        assert s is not None
+        self.assertAlmostEqual(s, 100.0 - 1.5 * 2.0, places=2)
+        self.assertIn("收紧", note)
+        # target too close
+        t, n2 = ensure_min_rr_target(100.0, 95.0, 101.0, k=1.0)
+        self.assertAlmostEqual(t or 0, 105.0, places=2)
+        self.assertIn("1.0:1", n2)
+
+    def test_three_light_all_green_full_entry(self):
+        self.assertTrue(THREE_LIGHT_SOP)
+        thr = MODE_THRESHOLDS["defensive"]
+        d = decide_three_lights(
+            thr=thr,
+            last=100.0,
+            entry_low=98.0,
+            entry_high=102.0,
+            entry_plan=100.0,
+            stop=95.0,
+            target=110.0,
+            wr=58.0,
+            wr_samples=20,
+            rr_net=1.25,
+            rr_paper=1.4,
+            price_far_chase=False,
             entry_opp="较佳入场",
             bias_label="看多",
             bias_score=30,
-            wr=58,
-            rr=1.4,
-            exp_r=0.25,
-            price_far_chase=False,
-            mode=MODE_THRESHOLDS["defensive"],
-            stability=55,
-            multi_rs_score=55,
-            trend_score=70,
-            weekly_allow_long=True,
-            rr_net=1.25,
-            vol_label="放量上涨",
-            wr_confidence="low",  # 以前会挡满仓
         )
-        self.assertEqual(v, "可以入場")
+        self.assertEqual(d["verdict"], "可以入場")
+        self.assertEqual(d["position_light"], "green")
+        self.assertEqual(d["wr_light"], "green")
+        self.assertEqual(d["rr_light"], "green")
+        self.assertIn("结论", d["plain_card"])
 
-    def test_wr_only_half_band(self):
-        v = _swing_verdict(
-            entry_opp="观望",
-            bias_label="中性",
-            bias_score=0,
-            wr=49,  # A 试仓线 48，满仓 52
-            rr=0.8,
-            exp_r=-0.2,
+    def test_three_light_bad_rr_red_wait(self):
+        """高胜率 + 区内 + 净R:R 很差 → 先别做（不划算）。"""
+        thr = MODE_THRESHOLDS["defensive"]
+        d = decide_three_lights(
+            thr=thr,
+            last=924.0,
+            entry_low=882.0,
+            entry_high=940.0,
+            entry_plan=924.0,
+            stop=819.0,
+            target=959.0,
+            wr=77.0,
+            wr_samples=180,
+            rr_net=0.29,
+            rr_paper=0.52,
             price_far_chase=False,
-            mode=MODE_THRESHOLDS["defensive"],
-            wr_confidence="none",
+            entry_opp="可关注",
+            bias_label="强烈看多",
+            bias_score=55,
         )
-        self.assertEqual(v, "可以試倉")
+        self.assertEqual(d["verdict"], "暫緩觀望")
+        self.assertEqual(d["rr_light"], "red")
+        self.assertEqual(d["position_light"], "green")
+        self.assertIn("不划算", d["one_liner_reason"] + d["rr_light_note"])
 
     def test_mode_thresholds(self):
         d = get_mode_thresholds("defensive")
@@ -484,34 +520,48 @@ class TestTradeSOPHelpers(unittest.TestCase):
         self.assertTrue(0 <= r.score <= 100)
 
     def test_swing_blocks_false_break(self):
-        v = _swing_verdict(
+        thr = MODE_THRESHOLDS["defensive"]
+        d = decide_three_lights(
+            thr=thr,
+            last=100.0,
+            entry_low=98.0,
+            entry_high=102.0,
+            entry_plan=100.0,
+            stop=95.0,
+            target=110.0,
+            wr=60.0,
+            wr_samples=30,
+            rr_net=1.2,
+            rr_paper=1.4,
+            price_far_chase=False,
             entry_opp="较佳入场",
             bias_label="看多",
             bias_score=30,
-            wr=60,
-            rr=1.5,
-            exp_r=0.3,
-            price_far_chase=False,
             false_break_risk=True,
         )
-        # WR-only 模式：假突破最多试仓，不允许满仓
-        self.assertEqual(v, "可以試倉")
+        self.assertEqual(d["verdict"], "可以試倉")
 
     def test_swing_blocks_against_trend(self):
-        v = _swing_verdict(
+        thr = MODE_THRESHOLDS["defensive"]
+        d = decide_three_lights(
+            thr=thr,
+            last=100.0,
+            entry_low=98.0,
+            entry_high=102.0,
+            entry_plan=100.0,
+            stop=95.0,
+            target=110.0,
+            wr=60.0,
+            wr_samples=30,
+            rr_net=1.2,
+            rr_paper=1.4,
+            price_far_chase=False,
             entry_opp="较佳入场",
             bias_label="看多",
             bias_score=30,
-            wr=60,
-            rr=1.5,
-            exp_r=0.3,
-            price_far_chase=False,
             against_trend=True,
-            trend_label="逆势",
-            trend_score=35,
         )
-        # WR-only：逆势不许满仓，高胜率最多试仓
-        self.assertEqual(v, "可以試倉")
+        self.assertEqual(d["verdict"], "可以試倉")
 
     def test_trend_align_offline(self):
         n = 80

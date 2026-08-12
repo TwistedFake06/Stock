@@ -197,6 +197,18 @@ class TradeSOP:
     upgrade_notes: list[str] = field(default_factory=list)
     # 一屏「决策摘要」：1–2 句说明为什么是这个结论
     decision_brief: str = ""
+    # 三灯短线 SOP（位置 · 胜率 · 划算）
+    position_light: str = "—"  # green | yellow | red
+    wr_light: str = "—"
+    rr_light: str = "—"
+    position_light_note: str = ""
+    wr_light_note: str = ""
+    rr_light_note: str = ""
+    one_liner_reason: str = ""
+    plain_card: str = ""
+    notional_hkd: float = 5000.0
+    pnl_if_win_hkd: float | None = None
+    pnl_if_loss_hkd: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -219,11 +231,18 @@ class ModeThresholds:
     default_risk_units_full: float  # 满仓默认 R（进攻版默认 0.5，达加分再升 1）
 
 
-# 门檻档位：中鬆（2026-08）
-# 入場裁決實驗：ENTRY_BY_WR_ONLY=True → 主要用技术路径胜率% 决定可否入場，
-# 不再因「样本不足/低样本」降级；样本数仅作显示。极端风险仍硬挡。
-ENTRY_BY_WR_ONLY = True
+# 产品宪法：三灯裁决（位置 · 胜率 · 划算）——默认启用
+# 已关闭「只看胜率」实验，避免与净 R:R 后置降级互相打架
+THREE_LIGHT_SOP = True
+ENTRY_BY_WR_ONLY = False  # 废弃实验；保留开关仅兼容旧测试
 MIN_PATH_SAMPLES_FOR_RATE = 1  # 有 1 笔已结算路径即可给出胜率%
+RR_YELLOW_FLOOR = 0.80  # 净 R:R 黄灯下限；低于此 = 红灯不划算
+DEFAULT_NOTIONAL_HKD = 5000.0
+# E/S/T 可执行结构（Phase 2）
+ZONE_ENTRY_FRAC = 0.35  # E_plan = 区下沿 + 35%×区宽（中下挂单，不追区上沿现价）
+MIN_RR_TARGET_K = 1.0  # T >= E + k×(E−S)，保证至少 1:1
+STOP_ATR_CAP = 1.5  # 止损距离上限（ATR 倍数）
+STOP_ATR_FLOOR = 0.6  # 止损距离下限（ATR 倍数）
 
 MODE_THRESHOLDS: dict[str, ModeThresholds] = {
     "defensive": ModeThresholds(
@@ -567,6 +586,296 @@ def resolve_path_win_rate(
         return round(day_v, 1), None, "day"
 
     return None, (last_n if last_n > 0 else None), "none"
+
+
+def _light_label(light: str) -> str:
+    return {"green": "绿", "yellow": "黄", "red": "红"}.get(light, light)
+
+
+def compute_position_light(
+    *,
+    last: float | None,
+    entry_low: float | None,
+    entry_high: float | None,
+    price_far_chase: bool,
+    entry_opp: str,
+) -> tuple[str, str]:
+    """位置灯：绿=可挂/区内；黄=略高；红=追高。"""
+    if price_far_chase or entry_opp == "不宜追高":
+        return "red", "现价远离入場区（追高），先别追"
+    if last is None or entry_low is None or entry_high is None:
+        return "yellow", "入場区不完整，谨慎"
+    lo, hi, px = float(entry_low), float(entry_high), float(last)
+    if lo > hi:
+        lo, hi = hi, lo
+    if lo <= px <= hi:
+        return "green", "现价在入場区内，可以挂限价"
+    if px < lo:
+        return "green", "现价低于入場区，可把限价挂在区内等回补"
+    # above zone
+    pct = (px / hi - 1.0) * 100.0 if hi > 0 else 0.0
+    if pct <= 3.0:
+        return "yellow", f"现价略高于区上沿约 {pct:.1f}%，最多试仓、勿追"
+    return "red", f"现价高于区上沿约 {pct:.1f}%（追高），先别做"
+
+
+def compute_wr_light(
+    wr: float | None,
+    thr: ModeThresholds,
+    *,
+    samples: int | None = None,
+) -> tuple[str, str]:
+    """胜率灯。"""
+    if wr is None:
+        return "red", "算不出路径胜率（样本/结构不足）"
+    note_n = f"，样本{int(samples)}" if samples else ""
+    if wr >= thr.wr_full:
+        return "green", f"历史路径胜率约 {wr:.0f}%（达满仓线 {thr.wr_full:.0f}%{note_n}）"
+    if wr >= thr.wr_half:
+        return "yellow", f"历史路径胜率约 {wr:.0f}%（仅试仓线 {thr.wr_half:.0f}%{note_n}）"
+    return "red", f"历史路径胜率约 {wr:.0f}%（低于试仓线 {thr.wr_half:.0f}%{note_n}）"
+
+
+def compute_rr_light(
+    rr_net: float | None,
+    thr: ModeThresholds,
+    *,
+    rr_paper: float | None = None,
+) -> tuple[str, str]:
+    """划算灯（净 R:R）。"""
+    rr = rr_net if rr_net is not None else rr_paper
+    if rr is None:
+        return "red", "算不出盈亏比（止损/目标不完整）"
+    if rr >= thr.rr_full:
+        return "green", f"净R:R约 {rr:.2f}（划算，满仓线≥{thr.rr_full:.2f}）"
+    if rr >= RR_YELLOW_FLOOR:
+        return "yellow", f"净R:R约 {rr:.2f}（偏紧，最多试仓）"
+    return "red", f"净R:R约 {rr:.2f}（不划算：目标太近或止损太远）"
+
+
+def hkd_pnl_space(
+    entry: float | None,
+    stop: float | None,
+    target: float | None,
+    notional_hkd: float = DEFAULT_NOTIONAL_HKD,
+) -> tuple[float | None, float | None]:
+    """按固定落单金额估算：赚到目标 / 打到止损 大约多少 HKD。"""
+    if entry is None or entry <= 0:
+        return None, None
+    e = float(entry)
+    win_hkd = loss_hkd = None
+    if target is not None and float(target) > e:
+        win_hkd = round(notional_hkd * (float(target) - e) / e, 1)
+    if stop is not None and float(stop) < e:
+        loss_hkd = round(notional_hkd * (e - float(stop)) / e, 1)
+    return win_hkd, loss_hkd
+
+
+def plan_limit_from_zone(
+    entry_low: float | None,
+    entry_high: float | None,
+    *,
+    frac: float = ZONE_ENTRY_FRAC,
+) -> float | None:
+    """计划限价 E_plan：区中下，避免用区上沿现价把 R:R 算爆。"""
+    if entry_low is None or entry_high is None:
+        return None
+    lo, hi = float(entry_low), float(entry_high)
+    if lo > hi:
+        lo, hi = hi, lo
+    if hi <= lo:
+        return round(lo, 4)
+    f = min(0.9, max(0.05, float(frac)))
+    return round(lo + f * (hi - lo), 4)
+
+
+def cap_stop_by_atr(
+    entry: float | None,
+    stop: float | None,
+    atr: float | None,
+    *,
+    cap_mult: float = STOP_ATR_CAP,
+    floor_mult: float = STOP_ATR_FLOOR,
+) -> tuple[float | None, str]:
+    """止损距离用 ATR 上下限夹住：太宽收紧、太近略放。"""
+    if entry is None or stop is None:
+        return stop, ""
+    e, s = float(entry), float(stop)
+    if s >= e:
+        return stop, ""
+    if atr is None or atr <= 0:
+        return round(s, 4), ""
+    atr = float(atr)
+    risk = e - s
+    max_risk = cap_mult * atr
+    min_risk = floor_mult * atr
+    notes: list[str] = []
+    if risk > max_risk + 1e-9:
+        s = e - max_risk
+        notes.append(f"止损过宽→按{cap_mult:.1f}×ATR收紧至{s:.2f}")
+    if e - s < min_risk - 1e-9:
+        s = e - min_risk
+        notes.append(f"止损过近→按{floor_mult:.1f}×ATR放宽至{s:.2f}")
+    return round(s, 4), "；".join(notes)
+
+
+def ensure_min_rr_target(
+    entry: float | None,
+    stop: float | None,
+    target: float | None,
+    *,
+    k: float = MIN_RR_TARGET_K,
+) -> tuple[float | None, str]:
+    """目标至少 E + k×风险，避免 T 贴 E 导致假高胜率/净R:R≈0。"""
+    if entry is None or stop is None:
+        return target, ""
+    e, s = float(entry), float(stop)
+    risk = e - s
+    if risk <= 0:
+        return target, ""
+    min_t = e + float(k) * risk
+    if target is None or float(target) < min_t - 1e-9:
+        return round(min_t, 4), f"目标过近→抬至至少{k:.1f}:1（{min_t:.2f}）"
+    return round(float(target), 4), ""
+
+
+def decide_three_lights(
+    *,
+    thr: ModeThresholds,
+    last: float | None,
+    entry_low: float | None,
+    entry_high: float | None,
+    entry_plan: float | None,
+    stop: float | None,
+    target: float | None,
+    wr: float | None,
+    wr_samples: int | None,
+    rr_net: float | None,
+    rr_paper: float | None,
+    price_far_chase: bool,
+    entry_opp: str,
+    bias_label: str,
+    bias_score: float,
+    vol_label: str = "",
+    false_break_risk: bool = False,
+    against_trend: bool = False,
+    weekly_allow_long: bool = True,
+    notional_hkd: float = DEFAULT_NOTIONAL_HKD,
+) -> dict[str, Any]:
+    """
+    三灯裁决：位置 · 胜率 · 划算 → 可以入場 | 可以試倉 | 暫緩觀望 | 不做多
+    """
+    pos_l, pos_n = compute_position_light(
+        last=last,
+        entry_low=entry_low,
+        entry_high=entry_high,
+        price_far_chase=price_far_chase,
+        entry_opp=entry_opp,
+    )
+    wr_l, wr_n = compute_wr_light(wr, thr, samples=wr_samples)
+    rr_l, rr_n = compute_rr_light(rr_net, thr, rr_paper=rr_paper)
+    win_hkd, loss_hkd = hkd_pnl_space(
+        entry_plan or last, stop, target, notional_hkd=notional_hkd
+    )
+
+    # 硬覆盖：方向/量能
+    hard_no: str | None = None
+    if entry_opp == "偏空回避" or "强烈看空" in (bias_label or ""):
+        hard_no = "方向强烈偏空，不做多"
+    elif "看空" in (bias_label or "") and bias_score <= -25:
+        hard_no = "方向看空且偏弱，不做多"
+    elif vol_label == "放量下跌":
+        hard_no = "放量下跌，今天不做多"
+
+    # 盖帽：最多试仓（黄）
+    caps: list[str] = []
+    if false_break_risk:
+        caps.append("假突破风险")
+    if not weekly_allow_long:
+        caps.append("周线偏空")
+    if against_trend:
+        caps.append("逆势环境")
+
+    if hard_no:
+        verdict = "不做多"
+        one = hard_no
+    else:
+        lights = (pos_l, wr_l, rr_l)
+        if "red" in lights:
+            verdict = "暫緩觀望"
+            # 主因：优先红灯
+            if pos_l == "red":
+                one = pos_n
+            elif rr_l == "red":
+                one = rr_n
+            else:
+                one = wr_n
+        elif all(x == "green" for x in lights) and not caps:
+            verdict = "可以入場"
+            one = "位置、胜率、划算三灯都绿，可按计划限价做"
+        else:
+            verdict = "可以試倉"
+            if caps:
+                one = "；".join(caps) + " → 最多试仓，勿满仓"
+            elif "yellow" in lights:
+                bits = []
+                if pos_l == "yellow":
+                    bits.append(pos_n)
+                if wr_l == "yellow":
+                    bits.append(wr_n)
+                if rr_l == "yellow":
+                    bits.append(rr_n)
+                one = "；".join(bits) if bits else "条件未全绿，最多试仓"
+            else:
+                one = "条件未全绿，最多试仓"
+
+    # 白话卡
+    v_human = {
+        "可以入場": "可以入場",
+        "可以試倉": "可以試倉（半仓心态）",
+        "暫緩觀望": "先别做",
+        "不做多": "不做多",
+    }.get(verdict, verdict)
+    win_s = f"约 +{win_hkd:.0f} HKD" if win_hkd is not None else "—"
+    loss_s = f"约 −{loss_hkd:.0f} HKD" if loss_hkd is not None else "—"
+    fair = {
+        "green": "还算划算",
+        "yellow": "勉强",
+        "red": "不划算",
+    }.get(rr_l, "—")
+    plain = (
+        f"【结论】{v_human}\n\n"
+        f"【三句话】\n"
+        f"1. 位置（{_light_label(pos_l)}）：{pos_n}\n"
+        f"2. 胜率（{_light_label(wr_l)}）：{wr_n}\n"
+        f"3. 划算吗（{_light_label(rr_l)}）：若赚到目标 {win_s}，"
+        f"若止损 {loss_s}（按每笔 {notional_hkd:.0f} HKD）→ {fair}\n\n"
+        f"【主因】{one}\n\n"
+        f"【可以做的】"
+    )
+    if verdict in ("可以入場", "可以試倉"):
+        plain += (
+            f" 限价挂在 {entry_low}–{entry_high}；"
+            f"止损 {stop}；目标 {target}。"
+            + (" 只用试仓量。" if verdict == "可以試倉" else "")
+        )
+    else:
+        plain += " 今天不新开多单；可等价格回到入場区且赔率改善再看。"
+
+    return {
+        "verdict": verdict,
+        "position_light": pos_l,
+        "wr_light": wr_l,
+        "rr_light": rr_l,
+        "position_light_note": pos_n,
+        "wr_light_note": wr_n,
+        "rr_light_note": rr_n,
+        "one_liner_reason": one,
+        "plain_card": plain,
+        "pnl_if_win_hkd": win_hkd,
+        "pnl_if_loss_hkd": loss_hkd,
+        "notional_hkd": float(notional_hkd),
+    }
 
 
 def path_wr_confidence(source: str, samples: int | None = None) -> str:
@@ -1011,6 +1320,8 @@ def _build_swing_plan(
     day_wr: float | None = None,
     high: pd.Series | None = None,
     low: pd.Series | None = None,
+    last_price: float | None = None,
+    notional_hkd: float = DEFAULT_NOTIONAL_HKD,
 ) -> SwingHorizonPlan:
     thr = mode or MODE_THRESHOLDS["defensive"]
     risk_ps = None
@@ -1039,7 +1350,7 @@ def _build_swing_plan(
             primary_horizon=bars,
             day_wr=day_wr,
             lookback=PATH_LOOKBACK_DEFAULT,
-            min_samples=MIN_SAMPLES_FULL,
+            min_samples=MIN_PATH_SAMPLES_FOR_RATE,
             high=high,
             low=low,
             ref_entry=ref_for_pct,
@@ -1056,38 +1367,72 @@ def _build_swing_plan(
     slip = apply_long_slippage(
         entry_ref, stop, target, win_rate_pct=wr, slip_pct=DEFAULT_SLIP_PCT
     )
-    # 纸面 E[R]（展示用；ENTRY_BY_WR_ONLY 时不参与入場门檻）
     exp_r = _expectancy_r(wr, rr) if wr is not None else None
 
-    verdict = _swing_verdict(
-        entry_opp=entry_opp,
-        bias_label=bias_label,
-        bias_score=bias_score,
-        wr=wr,
-        rr=rr,
-        exp_r=exp_r,
-        price_far_chase=price_far_chase,
-        vol_label=vol_label,
-        false_break_risk=false_break_risk,
-        block_breakout_chase=block_breakout_chase,
-        against_trend=against_trend,
-        trend_label=trend_label,
-        trend_score=trend_score,
-        weekly_allow_long=weekly_allow_long,
-        adx_trending=adx_trending,
-        adx_value=adx_value,
-        h1_ready=h1_ready,
-        mode=thr,
-        stability=stability,
-        multi_rs_score=multi_rs_score,
-        rr_net=slip.rr_net,
-        wr_confidence=wr_conf,
-    )
-    note_bits = [f"模式{thr.label}"]
-    if wr is not None:
-        note_bits.append(f"路径胜率{wr_display}（{wr_src}）")
+    plan_px = entry_ref
+    if THREE_LIGHT_SOP:
+        tl = decide_three_lights(
+            thr=thr,
+            last=last_price,
+            entry_low=entry_low,
+            entry_high=entry_high,
+            entry_plan=plan_px,
+            stop=stop,
+            target=target,
+            wr=wr,
+            wr_samples=wr_n,
+            rr_net=slip.rr_net,
+            rr_paper=rr,
+            price_far_chase=price_far_chase,
+            entry_opp=entry_opp,
+            bias_label=bias_label,
+            bias_score=bias_score,
+            vol_label=vol_label,
+            false_break_risk=false_break_risk,
+            against_trend=against_trend,
+            weekly_allow_long=weekly_allow_long,
+            notional_hkd=notional_hkd,
+        )
+        verdict = tl["verdict"]
+        note_bits = [
+            f"模式{thr.label}",
+            f"三灯 位置{_light_label(tl['position_light'])}/"
+            f"胜率{_light_label(tl['wr_light'])}/"
+            f"划算{_light_label(tl['rr_light'])}",
+            tl["one_liner_reason"],
+        ]
     else:
-        note_bits.append(wr_display)
+        verdict = _swing_verdict(
+            entry_opp=entry_opp,
+            bias_label=bias_label,
+            bias_score=bias_score,
+            wr=wr,
+            rr=rr,
+            exp_r=exp_r,
+            price_far_chase=price_far_chase,
+            vol_label=vol_label,
+            false_break_risk=false_break_risk,
+            block_breakout_chase=block_breakout_chase,
+            against_trend=against_trend,
+            trend_label=trend_label,
+            trend_score=trend_score,
+            weekly_allow_long=weekly_allow_long,
+            adx_trending=adx_trending,
+            adx_value=adx_value,
+            h1_ready=h1_ready,
+            mode=thr,
+            stability=stability,
+            multi_rs_score=multi_rs_score,
+            rr_net=slip.rr_net,
+            wr_confidence=wr_conf,
+        )
+        note_bits = [f"模式{thr.label}"]
+        if wr is not None:
+            note_bits.append(f"路径胜率{wr_display}（{wr_src}）")
+        else:
+            note_bits.append(wr_display)
+    if wr is not None and THREE_LIGHT_SOP:
+        note_bits.append(f"胜率{wr_display}")
     if rr is not None:
         note_bits.append(f"R:R≈{rr:.2f}")
     if exp_r is not None:
@@ -1538,12 +1883,30 @@ def build_trade_sop(
     except Exception:
         pass
 
-    # 评分用「入场区中位」固定 R:R / 期望 / 路径胜率
+    # —— E/S/T 可执行结构 ——
+    # E_plan：区中下挂单（不用区上沿现价算 R:R）
+    structure_notes: list[str] = []
+    atr_v: float | None = None
+    try:
+        if "ATR" in df.columns and len(df) > 0:
+            atr_v = float(df["ATR"].iloc[-1])
+            if atr_v != atr_v or atr_v <= 0:  # NaN
+                atr_v = None
+    except Exception:
+        atr_v = None
+
     if e_low and e_high:
         zone_mid = round((float(e_low) + float(e_high)) / 2.0, 4)
-        entry_plan = zone_mid
+        entry_plan = plan_limit_from_zone(e_low, e_high, frac=ZONE_ENTRY_FRAC)
+        if entry_plan is None:
+            entry_plan = zone_mid
         in_zone = float(e_low) <= last <= float(e_high)
-        display_limit = round(last, 4) if in_zone else zone_mid
+        # 挂单始终推荐 E_plan；现价仅用于位置灯 / 是否可立刻成交
+        display_limit = float(entry_plan)
+        structure_notes.append(
+            f"计划限价E={entry_plan:.2f}（区中下{ZONE_ENTRY_FRAC:.0%}），"
+            f"现价={last:.2f}仅判断追不追"
+        )
     else:
         zone_mid = round(last, 4)
         entry_plan = zone_mid
@@ -1560,6 +1923,14 @@ def build_trade_sop(
         if last > eh * 1.045:
             price_far_chase = True
 
+    # S：相对 E_plan 用 ATR 夹住
+    stop_raw = stop
+    stop, stop_adj = cap_stop_by_atr(
+        entry_plan, stop, atr_v, cap_mult=STOP_ATR_CAP, floor_mult=STOP_ATR_FLOOR
+    )
+    if stop_adj:
+        structure_notes.append(stop_adj)
+
     weekly_allow = True if weekly is None else bool(getattr(weekly, "allow_long", True))
     adx_trending = getattr(adx_r, "trending", None) if adx_r else None
     adx_val = getattr(adx_r, "adx", None) if adx_r else None
@@ -1574,7 +1945,19 @@ def build_trade_sop(
     if t2 is not None and t1 is not None and float(t2) < float(t1):
         t2 = t_med or t2
 
-    # 结构赔率一律相对 zone mid（稳定）— 默认用 0–2 周目标
+    # T：至少 E + k×风险（结构目标更远则保留）
+    t1, t1_adj = ensure_min_rr_target(
+        entry_plan, stop, t1, k=MIN_RR_TARGET_K
+    )
+    t2, t2_adj = ensure_min_rr_target(
+        entry_plan, stop, t2, k=MIN_RR_TARGET_K
+    )
+    if t1_adj:
+        structure_notes.append("T1" + t1_adj)
+    if t2_adj and t2_adj != t1_adj:
+        structure_notes.append("T2" + t2_adj)
+
+    # 结构赔率 / 路径一律相对 E_plan（计划限价）
     risk_ps = None
     if entry_plan and stop and entry_plan > stop:
         risk_ps = float(entry_plan) - float(stop)
@@ -1614,7 +1997,7 @@ def build_trade_sop(
             primary_horizon=10,
             day_wr=day_wr,
             lookback=PATH_LOOKBACK_DEFAULT,
-            min_samples=MIN_SAMPLES_FULL,
+            min_samples=MIN_PATH_SAMPLES_FOR_RATE,
             high=high_for_path,
             low=low_for_path,
             ref_entry=float(entry_plan) if entry_plan else None,
@@ -1686,6 +2069,8 @@ def build_trade_sop(
         day_wr=float(day_wr) if day_wr is not None else None,
         high=high_for_path,
         low=low_for_path,
+        last_price=float(last) if last is not None else None,
+        notional_hkd=DEFAULT_NOTIONAL_HKD,
     )
     swing_h1 = _build_swing_plan(
         key="h1",
@@ -1770,15 +2155,34 @@ def build_trade_sop(
         "不做多": ("回避", "偏空"),
     }
     enter_ok, side = _map_ok.get(primary.verdict, ("观望", "观望"))
-    # 净 R:R 过差时再降级（可执行赔率）
-    if enter_ok in ("适合入场", "谨慎试仓") and primary.rr_net is not None:
-        if primary.rr_net < 0.95:
-            enter_ok, side = "观望", "观望"
-            primary.verdict = "暫緩觀望"
-        elif enter_ok == "适合入场" and primary.rr_net < 1.15:
-            enter_ok, side = "谨慎试仓", "做多"
-            if primary.verdict == "可以入場":
-                primary.verdict = "可以試倉"
+    # 三灯已在 swing 裁决中含赔率；不再二次用 rr_net 偷偷降级（避免规则打架）
+
+    # 主周期三灯（最终结论与白话卡；在仓位计算前定稿）
+    tl_main = decide_three_lights(
+        thr=mode_thr,
+        last=float(last) if last is not None else None,
+        entry_low=primary.entry_low or e_low,
+        entry_high=primary.entry_high or e_high,
+        entry_plan=primary.entry_plan or display_limit or entry_plan,
+        stop=primary.stop_loss or stop,
+        target=primary.target or t1,
+        wr=primary.win_rate_pct,
+        wr_samples=getattr(primary, "win_rate_samples", None),
+        rr_net=primary.rr_net,
+        rr_paper=primary.rr,
+        price_far_chase=bool(price_far_chase),
+        entry_opp=entry.opportunity,
+        bias_label=bias.bias,
+        bias_score=float(bias.score),
+        vol_label=vol_label or "",
+        false_break_risk=bool(fbo_risk),
+        against_trend=bool(against_tr),
+        weekly_allow_long=bool(weekly_allow),
+        notional_hkd=DEFAULT_NOTIONAL_HKD,
+    )
+    if THREE_LIGHT_SOP:
+        primary.verdict = tl_main["verdict"]
+        enter_ok, side = _map_ok.get(primary.verdict, ("观望", "观望"))
 
     # 分数：用波段可操作性映射，方便扫描排序
     enter_score = {
@@ -2267,15 +2671,17 @@ def build_trade_sop(
         + (f" · {mode_note}" if mode_note else ""),
         f"主周期={primary.label}：决定做不做、出场纪律、滑点后R:R",
         f"时间止损：本模式最多 {max_hold} 个交易日",
-        "胜率=历史路径（%缩放+High/Low）· ≥12满仓 · 8–11低样本最多试仓 · day/blend估算",
+        "三灯=位置·胜率·划算；R:R/路径按计划限价E_plan（区中下），非追现价",
         f"滑点假设单边 {DEFAULT_SLIP_PCT * 100:.2f}%：净R:R更接近可成交",
+        f"目标至少{MIN_RR_TARGET_K:.1f}:1；止损风险约{STOP_ATR_FLOOR:.1f}–{STOP_ATR_CAP:.1f}×ATR",
         "出场硬规则：T1减半 → 止蚀保本 → 时间止损 → 破止蚀全出",
         "禁止：追高、摊平、扩大止损、无止损进场、逆势硬做",
-        "限价入场区内；成交后写交易日志（含模式 A/B）对照真胜率",
+        "限价挂在计划价附近；成交后写交易日志（含模式 A/B）",
         f"区间报酬 {rets.get('total_return_pct'):.1f}%，年化波动 {rets.get('volatility_pct'):.1f}%"
         if rets.get("total_return_pct") is not None and rets.get("volatility_pct") is not None
         else "数据仅供实盘辅助",
     ]
+    notes.extend(structure_notes[:6])
     if sr.nearest_support:
         notes.append(f"近支撑 ≈ {sr.nearest_support:.2f} · 近阻力 ≈ {sr.nearest_resistance}")
     notes.extend(quality.notes[:4])
@@ -2291,33 +2697,48 @@ def build_trade_sop(
     elif status.get("finnhub") and news and getattr(news, "available", False) and "AlphaVantage" not in data_sources:
         data_sources.append("Finnhub")
 
-    # 一屏决策摘要（结论 + 根据 + 主风险）
     prim_src_brief = getattr(primary, "win_rate_source", "") or wr_source
     prim_n_brief = getattr(primary, "win_rate_samples", None)
     if prim_n_brief is None:
         prim_n_brief = wr_samples
-    decision_brief = build_decision_brief(
-        verdict=primary.verdict,
-        mode_label=mode_thr.label,
-        wr_display=wr_txt,
-        wr_confidence=path_wr_confidence(prim_src_brief, prim_n_brief),
-        rr_net=primary.rr_net,
-        rr_paper=primary.rr,
-        exp_r=primary.expectancy_net
-        if primary.expectancy_net is not None
-        else primary.expectancy_r,
-        risk_units=float(risk_units),
-        bias_label=bias.bias,
-        bias_score=float(bias.score),
-        price_far_chase=bool(price_far_chase),
-        false_break_risk=bool(fbo_risk),
-        against_trend=bool(against_tr),
-        weekly_allow_long=bool(weekly_allow),
-        vol_label=vol_label or "",
-        mode_forced=bool(mode_forced),
-        mode_note=mode_note or "",
-        thr=mode_thr,
-    )
+    if THREE_LIGHT_SOP:
+        decision_brief = tl_main["plain_card"]
+        if structure_notes:
+            decision_brief += "\n\n【结构优化】" + "；".join(structure_notes[:4])
+        # 现价 vs 计划限价提示
+        if (
+            last is not None
+            and entry_plan is not None
+            and float(last) > float(entry_plan) * 1.005
+        ):
+            decision_brief += (
+                f"\n现价 {float(last):.2f} 高于计划限价 {float(entry_plan):.2f}："
+                f"请挂限价等回，勿市价追。"
+            )
+        tl_main["plain_card"] = decision_brief
+    else:
+        decision_brief = build_decision_brief(
+            verdict=primary.verdict,
+            mode_label=mode_thr.label,
+            wr_display=wr_txt,
+            wr_confidence=path_wr_confidence(prim_src_brief, prim_n_brief),
+            rr_net=primary.rr_net,
+            rr_paper=primary.rr,
+            exp_r=primary.expectancy_net
+            if primary.expectancy_net is not None
+            else primary.expectancy_r,
+            risk_units=float(risk_units),
+            bias_label=bias.bias,
+            bias_score=float(bias.score),
+            price_far_chase=bool(price_far_chase),
+            false_break_risk=bool(fbo_risk),
+            against_trend=bool(against_tr),
+            weekly_allow_long=bool(weekly_allow),
+            vol_label=vol_label or "",
+            mode_forced=bool(mode_forced),
+            mode_note=mode_note or "",
+            thr=mode_thr,
+        )
 
     return TradeSOP(
         symbol=sym,
@@ -2349,6 +2770,17 @@ def build_trade_sop(
         upgrade_hits=int(upgrade_hits),
         upgrade_notes=list(upgrade_notes),
         decision_brief=decision_brief,
+        position_light=tl_main["position_light"],
+        wr_light=tl_main["wr_light"],
+        rr_light=tl_main["rr_light"],
+        position_light_note=tl_main["position_light_note"],
+        wr_light_note=tl_main["wr_light_note"],
+        rr_light_note=tl_main["rr_light_note"],
+        one_liner_reason=tl_main["one_liner_reason"],
+        plain_card=tl_main["plain_card"],
+        notional_hkd=float(tl_main["notional_hkd"]),
+        pnl_if_win_hkd=tl_main["pnl_if_win_hkd"],
+        pnl_if_loss_hkd=tl_main["pnl_if_loss_hkd"],
         stability_score=stab,
         stability_label=stab_label,
         side=side,

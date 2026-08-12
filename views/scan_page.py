@@ -55,8 +55,8 @@ def _parse_text(raw: str) -> list[str]:
 def render_scan(period: str, interval: str, period_label: str) -> None:
     st.markdown("## Watchlist 掃描（短线 0–2周 / 2–4周）")
     st.caption(
-        f"掃清單 → **能否入場 · 勝率 · 入場價 · 止蝕 · 目標** · {period_label} · "
-        "主周期 0–2周（可試/可入）· 輔 2–4周 · 非投資建議"
+        f"掃清單 → **三灯（位置·胜率·划算）· 一句原因 · 掛單/止蝕** · {period_label} · "
+        "與投資SOP同源 · 每筆 5000 HKD 估算賺蝕 · 非投資建議"
     )
 
     # ---- list source ----
@@ -226,14 +226,25 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                             getattr(h2, "win_rate_samples", None) if h2 else None,
                         )
                     )
+                    def _lg(x: str) -> str:
+                        return {"green": "绿", "yellow": "黄", "red": "红"}.get(
+                            x or "", "—"
+                        )
+
                     rows_all.append(
                         {
                             "代码": sop.symbol,
                             "名称": sop.name,
                             "模式": getattr(sop, "mode_label", mode_ui),
                             "结论": sop.enter_ok,
-                            "主周期": getattr(prim, "label", horizon_ui) if prim else horizon_ui,
                             "主结论": getattr(prim, "verdict", "—") if prim else "—",
+                            "位置灯": _lg(getattr(sop, "position_light", "")),
+                            "胜率灯": _lg(getattr(sop, "wr_light", "")),
+                            "划算灯": _lg(getattr(sop, "rr_light", "")),
+                            "一句话": getattr(sop, "one_liner_reason", "") or "",
+                            "赚到目标HKD": getattr(sop, "pnl_if_win_hkd", None),
+                            "止损亏HKD": getattr(sop, "pnl_if_loss_hkd", None),
+                            "主周期": getattr(prim, "label", horizon_ui) if prim else horizon_ui,
                             "0-2周": getattr(h1, "verdict", "—") if h1 else "—",
                             "2-4周": getattr(h2, "verdict", "—") if h2 else "—",
                             "适合度": sop.enter_score,
@@ -386,25 +397,22 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         display_cols = [
             "代码",
             "名称",
-            "主周期",
             "主结论",
             "结论",
+            "位置灯",
+            "胜率灯",
+            "划算灯",
+            "一句话",
             "现价",
-            "入場低",
-            "入場高",
+            "掛單",
             "止蝕",
             "目标0-2周",
-            "目标2-4周",
-            "胜率0-2周%",
-            "胜率2-4周%",
+            "胜率0-2周",
             "净R:R",
-            "净E[R]",
-            "时间止损日",
-            "0-2周",
-            "2-4周",
-            "1H",
+            "赚到目标HKD",
+            "止损亏HKD",
             "周线",
-            "建议股数",
+            "1H",
         ]
         st.dataframe(
             show[[c for c in display_cols if c in show.columns]],
@@ -418,13 +426,21 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     if not enterable.empty:
         st.markdown("### 詳情卡（适合 / 谨慎）")
         for _, row in enterable.iterrows():
-            title = f"{row['代码']} · {row['结论']}（{row['适合度']:.0f}）"
+            title = f"{row['代码']} · {row.get('主结论', row['结论'])}（{row['适合度']:.0f}）"
             if row["结论"] == "适合入场":
                 box = st.success
             else:
                 box = st.warning
             with st.container(border=True):
                 box(f"**{title}** · {row['名称']}")
+                lights = (
+                    f"位置 **{row.get('位置灯', '—')}** · "
+                    f"胜率 **{row.get('胜率灯', '—')}** · "
+                    f"划算 **{row.get('划算灯', '—')}**"
+                )
+                st.caption(lights)
+                if row.get("一句话"):
+                    st.markdown(f"**主因：** {row['一句话']}")
                 c1, c2, c3, c4 = st.columns(4)
                 c1.markdown(
                     f"現價 **{row['现价']}**  \n"
@@ -436,23 +452,20 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                     f"目标0–2周 **{row.get('目标0-2周', row.get('T1'))}**  \n"
                     f"目标2–4周 **{row.get('目标2-4周', row.get('T2'))}**"
                 )
+                wr_show = row.get("胜率0-2周") or row.get("胜率0-2周%") or row.get("胜率%")
                 c3.markdown(
                     f"0–2周 **{row.get('0-2周', row.get('结论'))}**  \n"
-                    f"勝率 **{row.get('胜率0-2周%', row.get('胜率%'))}%**  \n"
-                    f"R:R **{row.get('R:R_0-2周', row.get('R:R'))}** · "
-                    f"E[R] **{row.get('E[R]_0-2周', row.get('期望E[R]'))}**"
+                    f"勝率 **{wr_show}**  \n"
+                    f"净R:R **{row.get('净R:R', row.get('R:R'))}**"
                 )
+                win_h = row.get("赚到目标HKD")
+                loss_h = row.get("止损亏HKD")
                 c4.markdown(
-                    f"2–4周 **{row.get('2-4周', '—')}** 勝率 **{row.get('胜率2-4周%', '—')}%**  \n"
-                    f"量能 **{row.get('量能', '—')}** · 板塊 **{row.get('板块RS', '—')}**  \n"
+                    f"賺到目標 ≈ **{win_h if win_h is not None else '—'} HKD**  \n"
+                    f"止損約虧 ≈ **{loss_h if loss_h is not None else '—'} HKD**  \n"
+                    f"（按每筆 5000 HKD）  \n"
                     f"股數 **{row['建议股数']}**"
                 )
-                if row.get("板块说明"):
-                    st.caption(row["板块说明"])
-                if row.get("量能说明"):
-                    st.caption(row["量能说明"])
-                if row.get("IV说明"):
-                    st.caption(row["IV说明"])
                 if row.get("立刻动作"):
                     st.caption(f"立刻：{row['立刻动作']}")
                 if row.get("失效"):
@@ -474,6 +487,6 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         )
 
     st.caption(
-        "評分已用同一套 SOP：R:R/E[R] 硬門檻 · 板塊RS · 量能確認 · IV · 市場環境 · "
-        "數據 Yahoo 可能延遲 · 非投資建議"
+        "與投資SOP同一套 **三灯裁决**（位置 · 胜率 · 划算）· 每筆按 5000 HKD 估算賺蝕空間 · "
+        "數據 Yahoo 可能延遲 · 非投資建議 · 改規則後請按「強制刷新」"
     )
