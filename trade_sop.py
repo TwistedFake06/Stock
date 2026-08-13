@@ -244,6 +244,9 @@ MIN_RR_TARGET_K = 1.0  # T >= E + k×(E−S)，保证至少 1:1
 STOP_ATR_CAP = 1.5  # 止损距离上限（ATR 倍数）
 STOP_ATR_FLOOR = 0.6  # 止损距离下限（ATR 倍数）
 
+# 部署指纹：Streamlit Cloud 侧栏应显示同一字串；否则仍是旧代码
+SOP_BUILD = "2026-08-13-three-light-est"
+
 MODE_THRESHOLDS: dict[str, ModeThresholds] = {
     "defensive": ModeThresholds(
         key="defensive",

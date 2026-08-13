@@ -106,6 +106,11 @@ st.set_page_config(
 inject_ios_safari_support()
 inject_mobile_css()
 
+try:
+    from trade_sop import SOP_BUILD as _SOP_BUILD
+except Exception:
+    _SOP_BUILD = "legacy-no-build"
+
 # ---- session state ----
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = load_watchlist()
@@ -245,6 +250,9 @@ with st.sidebar:
     interval_label = st.selectbox("K线周期", list(INTERVAL_MAP.keys()), index=0)
     period = PERIOD_MAP[period_label]
     interval = INTERVAL_MAP[interval_label]
+
+    st.caption(f"SOP build: `{_SOP_BUILD}`")
+    st.caption("Cloud 须与本地同一 build；不同=未部署最新代码")
 
     st.divider()
     st.markdown("**快速选择**")
