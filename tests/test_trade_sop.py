@@ -36,6 +36,7 @@ from trade_sop import (
     cap_stop_by_atr,
     decide_three_lights,
     ensure_min_rr_target,
+    order_targets_near_far,
     format_win_rate,
     get_mode_thresholds,
     path_wr_confidence,
@@ -195,6 +196,16 @@ class TestTradeSOPHelpers(unittest.TestCase):
         t, n2 = ensure_min_rr_target(100.0, 95.0, 101.0, k=1.0)
         self.assertAlmostEqual(t or 0, 105.0, places=2)
         self.assertIn("1.0:1", n2)
+
+    def test_order_targets_t1_le_t2(self):
+        a, b, note = order_targets_near_far(110.0, 105.0)
+        self.assertAlmostEqual(a or 0, 105.0)
+        self.assertAlmostEqual(b or 0, 110.0)
+        self.assertIn("重排", note)
+        a2, b2, n2 = order_targets_near_far(105.0, 120.0)
+        self.assertAlmostEqual(a2 or 0, 105.0)
+        self.assertAlmostEqual(b2 or 0, 120.0)
+        self.assertEqual(n2, "")
 
     def test_three_light_all_green_full_entry(self):
         self.assertTrue(THREE_LIGHT_SOP)

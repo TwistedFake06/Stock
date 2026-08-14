@@ -217,15 +217,15 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
                         plan_verdict = primary.verdict or "—"
                         max_days = int(getattr(primary, "bars", None) or 10)
                     if secondary and getattr(secondary, "target", None):
-                        # 另一周期目标作 T2（若主计划目标更远则互换逻辑）
-                        t_sec = _f(secondary.target)
-                        t_pri = _f(plan_t1)
-                        if t_sec is not None:
-                            if t_pri is None or t_sec > t_pri:
-                                plan_t2 = t_sec
-                            else:
-                                # secondary nearer: keep as T1 if missing, else T2 still secondary
-                                plan_t2 = t_sec
+                        plan_t2 = _f(secondary.target)
+                    # 强制：T1=较近目标，T2=较远目标（避免主周期选 2–4周 时 T1>T2）
+                    ta, tb = _f(plan_t1), _f(plan_t2)
+                    if ta is not None and tb is not None:
+                        plan_t1, plan_t2 = min(ta, tb), max(ta, tb)
+                    elif ta is not None:
+                        plan_t1, plan_t2 = ta, None
+                    elif tb is not None:
+                        plan_t1, plan_t2 = tb, None
                     if exit_pl and getattr(exit_pl, "max_hold_days", None):
                         max_days = int(exit_pl.max_hold_days)
                     if sop.last_price is not None:

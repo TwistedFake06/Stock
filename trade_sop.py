@@ -743,6 +743,30 @@ def ensure_min_rr_target(
     return round(float(target), 4), ""
 
 
+def order_targets_near_far(
+    t1: float | None,
+    t2: float | None,
+) -> tuple[float | None, float | None, str]:
+    """
+    保证 T1（近）≤ T2（远）。
+    结构/1:1 抬升后，短周期目标可能被抬得比中期还高，需重排。
+    """
+    a, b = (
+        float(t1) if t1 is not None else None,
+        float(t2) if t2 is not None else None,
+    )
+    if a is None and b is None:
+        return None, None, ""
+    if a is None:
+        return round(b, 4), None, ""
+    if b is None:
+        return round(a, 4), None, ""
+    if a <= b + 1e-9:
+        return round(a, 4), round(b, 4), ""
+    # 颠倒：近的做 T1，远的做 T2
+    return round(b, 4), round(a, 4), f"已重排目标：T1={b:.2f}（近）≤ T2={a:.2f}（远）"
+
+
 def decide_three_lights(
     *,
     thr: ModeThresholds,
@@ -1954,12 +1978,16 @@ def build_trade_sop(
         entry_plan, stop, t1, k=MIN_RR_TARGET_K
     )
     t2, t2_adj = ensure_min_rr_target(
-        entry_plan, stop, t2, k=MIN_RR_TARGET_K
+        entry_plan, stop, t2, k=max(MIN_RR_TARGET_K, 1.2)
     )
     if t1_adj:
         structure_notes.append("T1" + t1_adj)
     if t2_adj and t2_adj != t1_adj:
         structure_notes.append("T2" + t2_adj)
+    # 强制 T1（近）≤ T2（远）—— 避免 1:1 抬升后短目标反超中期
+    t1, t2, t_ord = order_targets_near_far(t1, t2)
+    if t_ord:
+        structure_notes.append(t_ord)
 
     # 结构赔率 / 路径一律相对 E_plan（计划限价）
     risk_ps = None
