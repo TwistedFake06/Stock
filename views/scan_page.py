@@ -55,8 +55,14 @@ def _parse_text(raw: str) -> list[str]:
 def render_scan(period: str, interval: str, period_label: str) -> None:
     st.markdown("## Watchlist 掃描（短线 0–2周 / 2–4周）")
     st.caption(
-        f"掃清單 → **三灯（位置·胜率·划算）· 一句原因 · 掛單/止蝕** · {period_label} · "
-        "與投資SOP同源 · 每筆 5000 HKD 估算賺蝕 · 非投資建議"
+        f"極簡預設：只看 **結論 + 三灯 + 一句話 + 掛單/止蝕** · {period_label} · "
+        "與投資SOP同源 · 非投資建議"
+    )
+    scan_simple = st.toggle(
+        "掃描極簡表（推荐）",
+        value=bool(st.session_state.get("scan_simple_mode", True)),
+        key="scan_simple_mode",
+        help="开启只显示决策列；关闭显示更多栏位",
     )
 
     # ---- list source ----
@@ -65,65 +71,78 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
 
     default_text = "\n".join(file_syms) if file_syms else "\n".join(session_wl[:20])
 
-    st.markdown("### 掃描清單")
-    src = st.radio(
-        "清單來源",
-        ["編輯下方文字", "App 自選股", "預設 DEFAULT_WATCHLIST"],
-        horizontal=True,
-        index=0,
-    )
+    # 清单默认用档案/自选（避免一开页就一大坨编辑区）
+    with st.expander("編輯掃描清單 / 参数", expanded=False):
+        src = st.radio(
+            "清單來源",
+            ["編輯下方文字", "App 自選股", "預設 DEFAULT_WATCHLIST"],
+            horizontal=True,
+            index=0,
+            key="scan_list_src",
+        )
+        text = st.text_area(
+            "股票代碼（一行一個，或逗號分隔）",
+            value=default_text,
+            height=140,
+            help="例：AAPL / NVDA / SPY",
+            key="scan_list_text",
+        )
+        HKD_PER_USD = 7.8
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1:
+            capital_hkd = st.number_input(
+                "本金 HKD",
+                min_value=1000.0,
+                value=50000.0,
+                step=1000.0,
+                key="scan_capital_hkd",
+            )
+        with c2:
+            risk_pct = st.number_input(
+                "1R %", min_value=0.25, max_value=5.0, value=1.0, step=0.25, key="scan_risk"
+            )
+        with c3:
+            horizon_ui = st.selectbox(
+                "主周期",
+                ["0–2周", "2–4周"],
+                index=0,
+                key="scan_horizon",
+            )
+        with c4:
+            mode_ui = st.selectbox(
+                "模式",
+                ["A 防守版", "B 进攻版"],
+                index=0
+                if st.session_state.get("sop_mode", "defensive") != "aggressive"
+                else 1,
+                key="scan_mode_ui",
+            )
+        with c5:
+            min_level = st.selectbox(
+                "顯示級別",
+                ["适合+谨慎", "仅适合入场", "全部"],
+                index=0,
+                key="scan_min_level",
+            )
+        save_list = st.checkbox("寫入 scan 檔", value=True, key="scan_save_list")
 
-    text = st.text_area(
-        "股票代碼（一行一個，或逗號分隔）",
-        value=default_text,
-        height=180,
-        help="例：AAPL / NVDA / 0700.HK / SPY",
-        key="scan_list_text",
-    )
-
+    # 未打开 expander 时用 session / 默认，避免 NameError
+    src = st.session_state.get("scan_list_src", "編輯下方文字")
+    text = st.session_state.get("scan_list_text", default_text)
+    capital_hkd = float(st.session_state.get("scan_capital_hkd", 50000.0))
+    risk_pct = float(st.session_state.get("scan_risk", 1.0))
+    horizon_ui = st.session_state.get("scan_horizon", "0–2周")
+    mode_ui = st.session_state.get("scan_mode_ui", "A 防守版")
+    min_level = st.session_state.get("scan_min_level", "适合+谨慎")
+    save_list = bool(st.session_state.get("scan_save_list", True))
     HKD_PER_USD = 7.8
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    with c1:
-        capital_hkd = st.number_input(
-            "本金 HKD",
-            min_value=1000.0,
-            value=50000.0,
-            step=1000.0,
-            help="默认 50,000 HKD",
-        )
-    with c2:
-        risk_pct = st.number_input("1R %", min_value=0.25, max_value=5.0, value=1.0, step=0.25)
-    with c3:
-        horizon_ui = st.selectbox(
-            "主周期",
-            ["0–2周", "2–4周"],
-            index=0,
-            help="按此周期判定可入場（含滑点净R:R）",
-        )
-    with c4:
-        mode_ui = st.selectbox(
-            "模式",
-            ["A 防守版", "B 进攻版"],
-            index=0 if st.session_state.get("sop_mode", "defensive") != "aggressive" else 1,
-            help="与投资SOP 同源门檻",
-        )
-    with c5:
-        min_level = st.selectbox(
-            "顯示級別",
-            ["适合+谨慎", "仅适合入场", "全部"],
-            index=0,
-        )
-    with c6:
-        st.write("")
-        st.write("")
-        save_list = st.checkbox("寫入 scan 檔", value=True)
     capital = float(capital_hkd) / HKD_PER_USD
     primary_horizon = "h1" if horizon_ui == "0–2周" else "h2"
     mode_key = "aggressive" if str(mode_ui).startswith("B") else "defensive"
     st.session_state["sop_mode"] = mode_key
     st.caption(
-        f"仓位 USD≈${capital:,.0f} · 主周期 **{horizon_ui}** · "
-        f"模式 **{mode_ui}** · 含出场/净R:R"
+        f"主周期 **{horizon_ui}** · 模式 **{mode_ui}** · "
+        f"{'極簡表' if scan_simple else '完整表'}"
     )
 
     if src == "App 自選股":
@@ -394,26 +413,40 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     if show.empty:
         st.warning("以目前過濾條件，沒有可顯示標的。可改「顯示級別」為「全部」。")
     else:
-        display_cols = [
-            "代码",
-            "名称",
-            "主结论",
-            "结论",
-            "位置灯",
-            "胜率灯",
-            "划算灯",
-            "一句话",
-            "现价",
-            "掛單",
-            "止蝕",
-            "目标0-2周",
-            "胜率0-2周",
-            "净R:R",
-            "赚到目标HKD",
-            "止损亏HKD",
-            "周线",
-            "1H",
-        ]
+        if scan_simple:
+            display_cols = [
+                "代码",
+                "主结论",
+                "位置灯",
+                "胜率灯",
+                "划算灯",
+                "一句话",
+                "现价",
+                "掛單",
+                "止蝕",
+                "目标0-2周",
+            ]
+        else:
+            display_cols = [
+                "代码",
+                "名称",
+                "主结论",
+                "结论",
+                "位置灯",
+                "胜率灯",
+                "划算灯",
+                "一句话",
+                "现价",
+                "掛單",
+                "止蝕",
+                "目标0-2周",
+                "胜率0-2周",
+                "净R:R",
+                "赚到目标HKD",
+                "止损亏HKD",
+                "周线",
+                "1H",
+            ]
         st.dataframe(
             show[[c for c in display_cols if c in show.columns]],
             use_container_width=True,

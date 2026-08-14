@@ -245,7 +245,8 @@ STOP_ATR_CAP = 1.5  # 止损距离上限（ATR 倍数）
 STOP_ATR_FLOOR = 0.6  # 止损距离下限（ATR 倍数）
 
 # 部署指纹：Streamlit Cloud 侧栏应显示同一字串；否则仍是旧代码
-SOP_BUILD = "2026-08-13-three-light-est"
+# v1 定版：三灯 + E/S/T + 极简 UI；暂停加指标/改门檻，专注执行与日志
+SOP_BUILD = "v1-stable-2026-08"
 
 MODE_THRESHOLDS: dict[str, ModeThresholds] = {
     "defensive": ModeThresholds(

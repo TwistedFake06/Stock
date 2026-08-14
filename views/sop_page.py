@@ -58,9 +58,13 @@ def render_sop(
     interval_label: str,
 ) -> None:
     st.markdown("## 短线计划（一屏）")
+    try:
+        from trade_sop import SOP_BUILD as _b
+    except Exception:
+        _b = "—"
     st.caption(
         f"`{symbol}` · {period_label}/{interval_label} · "
-        "已买入请侧栏点 **我已买入**"
+        f"build `{_b}` · **v1 极简定版** · 已买入 → 侧栏 **我已买入**"
     )
 
     # ---- compact controls ----
@@ -137,8 +141,15 @@ def render_sop(
     slip = getattr(sop, "slip_rr", None)
     other = h2 if primary_horizon == "h1" else h1
 
-    # ========== 一屏决策卡（默认全部可见）==========
+    # ========== 一屏决策（默认极简，减少噪音）==========
     st.markdown("---")
+    simple = st.toggle(
+        "极简模式（推荐）",
+        value=bool(st.session_state.get("sop_simple_mode", True)),
+        key="sop_simple_mode",
+        help="开启：只看三灯+主因+挂单/止蚀/目标。关闭：显示完整明细。",
+    )
+
     name = sop.name or symbol
     last = sop.last_price
     st.markdown(f"### {name} · `{sop.symbol}` · 现价 **{_fmt(last)}**")
@@ -154,7 +165,7 @@ def render_sop(
     else:
         st.warning(sop.enter_ok)
 
-    # 三灯（位置 · 胜率 · 划算）
+    # 三灯（位置 · 胜率 · 划算）— 日常唯一必看
     def _light_emoji(x: str) -> str:
         return {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(x or "", "⚪")
 
@@ -162,94 +173,98 @@ def render_sop(
     wl = getattr(sop, "wr_light", None)
     rl = getattr(sop, "rr_light", None)
     if pl and wl and rl:
-        st.markdown("#### 三灯（位置 · 胜率 · 划算）")
+        st.markdown("#### 只看这三灯")
         t1, t2, t3 = st.columns(3)
         t1.metric(
             f"{_light_emoji(pl)} 位置",
             {"green": "可挂/区内", "yellow": "略高", "red": "追高/远离"}.get(pl, pl),
-            getattr(sop, "position_light_note", "")[:40] or None,
         )
         t2.metric(
             f"{_light_emoji(wl)} 胜率",
             _wr_text(primary if primary else sop),
-            getattr(sop, "wr_light_note", "")[:40] or None,
         )
         t3.metric(
             f"{_light_emoji(rl)} 划算",
             _fmt(getattr(primary, "rr_net", None) if primary else None),
-            getattr(sop, "rr_light_note", "")[:40] or None,
         )
-        win_h = getattr(sop, "pnl_if_win_hkd", None)
-        loss_h = getattr(sop, "pnl_if_loss_hkd", None)
-        notional = getattr(sop, "notional_hkd", 5000) or 5000
-        if win_h is not None or loss_h is not None:
-            st.caption(
-                f"按每笔 **{notional:.0f} HKD**：赚到目标约 "
-                f"**{('+' + f'{win_h:.0f}') if win_h is not None else '—'} HKD** · "
-                f"止损约 **{('-' + f'{loss_h:.0f}') if loss_h is not None else '—'} HKD**"
-            )
 
-    # 白话结果卡
-    card = getattr(sop, "plain_card", None) or getattr(sop, "decision_brief", "") or ""
-    if card:
-        st.markdown("#### 白话结果")
-        st.info(card)
     one = getattr(sop, "one_liner_reason", "") or ""
     if one:
-        st.caption(f"**主因：** {one}")
+        st.info(f"**主因：** {one}")
 
-    # 核心 6 格
-    k1, k2, k3, k4, k5, k6 = st.columns(6)
-    k1.metric(
-        "入場区",
-        _fmt(primary.entry_low if primary else sop.entry_low),
-        f"至 {_fmt(primary.entry_high if primary else sop.entry_high)}",
+    # 四个执行价（极简必看）
+    st.markdown("#### 执行价位")
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("掛單 E", _fmt(primary.entry_plan if primary else sop.entry_plan))
+    k2.metric("止蝕 S", _fmt(primary.stop_loss if primary else sop.stop_loss))
+    k3.metric("目標 T", _fmt(primary.target if primary else sop.target_t1))
+    win_h = getattr(sop, "pnl_if_win_hkd", None)
+    loss_h = getattr(sop, "pnl_if_loss_hkd", None)
+    notional = getattr(sop, "notional_hkd", 5000) or 5000
+    k4.metric(
+        f"约盈/亏({notional:.0f}HKD)",
+        (
+            f"+{win_h:.0f}/−{loss_h:.0f}"
+            if win_h is not None and loss_h is not None
+            else "—"
+        ),
     )
-    k2.metric("掛單", _fmt(primary.entry_plan if primary else sop.entry_plan))
-    k3.metric("止蝕", _fmt(primary.stop_loss if primary else sop.stop_loss))
-    k4.metric("目標", _fmt(primary.target if primary else sop.target_t1))
-    k5.metric("勝率", _wr_text(primary if primary else sop))
-    net_rr = None
-    if primary and getattr(primary, "rr_net", None) is not None:
-        net_rr = primary.rr_net
-    elif slip and slip.rr_net is not None:
-        net_rr = slip.rr_net
-    paper_rr = primary.rr if primary else sop.rr_t1
-    k6.metric(
-        "净R:R",
-        _fmt(net_rr),
-        f"纸面 {_fmt(paper_rr)}" if paper_rr is not None else None,
+    st.caption(
+        f"入場区 {_fmt(primary.entry_low if primary else sop.entry_low)}–"
+        f"{_fmt(primary.entry_high if primary else sop.entry_high)} · "
+        "现价仅判断追不追；按 **掛單 E** 等，勿市价追。"
     )
 
-    # 一句话走势
-    if getattr(sop, "trend_note", None):
-        st.caption(sop.trend_note)
-
-    # 出场 5 条（硬规则，默认展开短）
-    st.markdown("#### 出场纪律")
+    # 出场：极简只 3 条
+    st.markdown("#### 出场（记住这三条）")
     if exit_pl:
-        for b in exit_pl.bullets[:6]:
-            st.markdown(f"- {b}")
-        e1, e2, e3 = st.columns(3)
-        e1.caption(f"T1后止蚀≈ **{_fmt(exit_pl.stop_after_t1)}**（保本）")
-        e2.caption(f"最多持有 **{exit_pl.max_hold_days}** 交易日")
-        e3.caption(f"初始止蚀 **{_fmt(exit_pl.stop_initial)}**")
+        st.markdown(
+            f"1. 到 T1 减半，止蚀改保本  \n"
+            f"2. 最多持有约 **{exit_pl.max_hold_days}** 个交易日  \n"
+            f"3. 收盘破止蚀 **{_fmt(exit_pl.stop_initial)}** → 全出"
+        )
     else:
         st.caption("无出场计划")
 
-    # 立刻动作（最多 4 条）
-    if sop.actions_now:
-        st.markdown("#### 现在做什么")
-        for i, line in enumerate(sop.actions_now[:4], 1):
-            st.markdown(f"{i}. {line}")
-    if sop.invalidation:
-        st.error(f"**失效：** {sop.invalidation}")
-
-    st.caption(
-        f"**{mode_lab}** · 建议股数 **{sop.position_shares}** · "
-        f"允许 **{getattr(sop, 'risk_units', 0):g}R** · {sop.position_note} · "
-        f"1R≈HKD {capital_hkd * risk_pct / 100:,.0f}"
-    )
+    if simple:
+        st.caption(
+            "极简模式已开：辅助信号/清单/日志在下方折叠。关闭极简可看全文。"
+        )
+    else:
+        # 完整明细
+        card = getattr(sop, "plain_card", None) or getattr(sop, "decision_brief", "") or ""
+        if card:
+            with st.expander("白话全文", expanded=True):
+                st.markdown(card)
+        if pl and wl and rl:
+            st.caption(getattr(sop, "position_light_note", "") or "")
+            st.caption(getattr(sop, "wr_light_note", "") or "")
+            st.caption(getattr(sop, "rr_light_note", "") or "")
+        net_rr = None
+        if primary and getattr(primary, "rr_net", None) is not None:
+            net_rr = primary.rr_net
+        elif slip and slip.rr_net is not None:
+            net_rr = slip.rr_net
+        paper_rr = primary.rr if primary else sop.rr_t1
+        x1, x2 = st.columns(2)
+        x1.metric("净R:R", _fmt(net_rr), f"纸面 {_fmt(paper_rr)}" if paper_rr else None)
+        x2.metric("胜率", _wr_text(primary if primary else sop))
+        if getattr(sop, "trend_note", None):
+            st.caption(sop.trend_note)
+        if exit_pl:
+            with st.expander("出场纪律全文", expanded=False):
+                for b in exit_pl.bullets[:8]:
+                    st.markdown(f"- {b}")
+        if sop.actions_now:
+            st.markdown("#### 现在做什么")
+            for i, line in enumerate(sop.actions_now[:4], 1):
+                st.markdown(f"{i}. {line}")
+        if sop.invalidation:
+            st.error(f"**失效：** {sop.invalidation}")
+        st.caption(
+            f"**{mode_lab}** · 建议股数 **{sop.position_shares}** · "
+            f"{sop.position_note}"
+        )
 
     # ========== 以下全部折叠 ==========
     with st.expander("另一周期对照", expanded=False):
