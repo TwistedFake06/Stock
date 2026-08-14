@@ -263,6 +263,12 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                             "一句话": getattr(sop, "one_liner_reason", "") or "",
                             "赚到目标HKD": getattr(sop, "pnl_if_win_hkd", None),
                             "止损亏HKD": getattr(sop, "pnl_if_loss_hkd", None),
+                            "财报天": getattr(sop, "earnings_days_left", None),
+                            "财报": (
+                                "是"
+                                if getattr(sop, "earnings_soon", False)
+                                else ""
+                            ),
                             "主周期": getattr(prim, "label", horizon_ui) if prim else horizon_ui,
                             "0-2周": getattr(h1, "verdict", "—") if h1 else "—",
                             "2-4周": getattr(h2, "verdict", "—") if h2 else "—",
@@ -421,6 +427,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                 "胜率灯",
                 "划算灯",
                 "一句话",
+                "财报天",
                 "现价",
                 "掛單",
                 "止蝕",
@@ -436,6 +443,8 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                 "胜率灯",
                 "划算灯",
                 "一句话",
+                "财报",
+                "财报天",
                 "现价",
                 "掛單",
                 "止蝕",

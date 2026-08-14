@@ -191,6 +191,13 @@ def render_sop(
     one = getattr(sop, "one_liner_reason", "") or ""
     if one:
         st.info(f"**主因：** {one}")
+    if getattr(sop, "earnings_soon", False) or getattr(sop, "earnings_note", ""):
+        ed = getattr(sop, "earnings_days_left", None)
+        en = getattr(sop, "earnings_note", "") or "临近财报窗口"
+        if ed is not None and 0 <= int(ed) <= 3:
+            st.error(f"**财报风险：** {en}")
+        else:
+            st.warning(f"**财报：** {en}")
 
     # 四个执行价（极简必看）
     st.markdown("#### 执行价位")

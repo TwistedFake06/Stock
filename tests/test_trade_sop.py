@@ -233,6 +233,47 @@ class TestTradeSOPHelpers(unittest.TestCase):
         self.assertEqual(d["rr_light"], "green")
         self.assertIn("结论", d["plain_card"])
 
+    def test_three_light_earnings_blocks_full(self):
+        thr = MODE_THRESHOLDS["defensive"]
+        d = decide_three_lights(
+            thr=thr,
+            last=100.0,
+            entry_low=98.0,
+            entry_high=102.0,
+            entry_plan=100.0,
+            stop=95.0,
+            target=110.0,
+            wr=60.0,
+            wr_samples=30,
+            rr_net=1.3,
+            rr_paper=1.4,
+            price_far_chase=False,
+            entry_opp="较佳入场",
+            bias_label="看多",
+            bias_score=30,
+            earnings_days_left=2,
+        )
+        self.assertEqual(d["verdict"], "暫緩觀望")
+        d2 = decide_three_lights(
+            thr=thr,
+            last=100.0,
+            entry_low=98.0,
+            entry_high=102.0,
+            entry_plan=100.0,
+            stop=95.0,
+            target=110.0,
+            wr=60.0,
+            wr_samples=30,
+            rr_net=1.3,
+            rr_paper=1.4,
+            price_far_chase=False,
+            entry_opp="较佳入场",
+            bias_label="看多",
+            bias_score=30,
+            earnings_days_left=10,
+        )
+        self.assertEqual(d2["verdict"], "可以試倉")
+
     def test_three_light_bad_rr_red_wait(self):
         """高胜率 + 区内 + 净R:R 很差 → 先别做（不划算）。"""
         thr = MODE_THRESHOLDS["defensive"]

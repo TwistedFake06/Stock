@@ -209,6 +209,9 @@ class TradeSOP:
     notional_hkd: float = 5000.0
     pnl_if_win_hkd: float | None = None
     pnl_if_loss_hkd: float | None = None
+    earnings_soon: bool = False
+    earnings_days_left: int | None = None
+    earnings_note: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -245,8 +248,8 @@ STOP_ATR_CAP = 1.5  # 止损距离上限（ATR 倍数）
 STOP_ATR_FLOOR = 0.6  # 止损距离下限（ATR 倍数）
 
 # 部署指纹：Streamlit Cloud 侧栏应显示同一字串；否则仍是旧代码
-# v1 定版：三灯 + E/S/T + 极简 UI；暂停加指标/改门檻，专注执行与日志
-SOP_BUILD = "v1-stable-2026-08"
+# v1 定版：三灯 + E/S/T + 极简 UI + 财报窗口盖帽（Yahoo 日历，无新 API）
+SOP_BUILD = "v1-stable-2026-08-earn"
 
 MODE_THRESHOLDS: dict[str, ModeThresholds] = {
     "defensive": ModeThresholds(
@@ -789,9 +792,11 @@ def decide_three_lights(
     against_trend: bool = False,
     weekly_allow_long: bool = True,
     notional_hkd: float = DEFAULT_NOTIONAL_HKD,
+    earnings_days_left: int | None = None,
 ) -> dict[str, Any]:
     """
     三灯裁决：位置 · 胜率 · 划算 → 可以入場 | 可以試倉 | 暫緩觀望 | 不做多
+    财报窗口（Yahoo 日历）：≤3 天强制暂缓新仓；≤14 天最多试仓。
     """
     pos_l, pos_n = compute_position_light(
         last=last,
@@ -823,10 +828,24 @@ def decide_three_lights(
         caps.append("周线偏空")
     if against_trend:
         caps.append("逆势环境")
+    # 财报：≤3 天不新开；≤14 天最多试仓（免费 Yahoo 日历，已有）
+    earn_block = False
+    earn_msg = ""
+    if earnings_days_left is not None and 0 <= int(earnings_days_left) <= 14:
+        d = int(earnings_days_left)
+        if d <= 3:
+            earn_block = True
+            earn_msg = f"财报约 {d} 天内：跳空风险高，暂缓开新仓"
+        else:
+            caps.append(f"财报约 {d} 天内")
+            earn_msg = f"财报约 {d} 天内：最多试仓，避免扛隔夜"
 
     if hard_no:
         verdict = "不做多"
         one = hard_no
+    elif earn_block:
+        verdict = "暫緩觀望"
+        one = earn_msg
     else:
         lights = (pos_l, wr_l, rr_l)
         if "red" in lights:
@@ -856,6 +875,8 @@ def decide_three_lights(
                 one = "；".join(bits) if bits else "条件未全绿，最多试仓"
             else:
                 one = "条件未全绿，最多试仓"
+        if earn_msg and verdict == "可以試倉" and "财报" not in one:
+            one = earn_msg + "；" + one
 
     # 白话卡
     v_human = {
@@ -1350,6 +1371,7 @@ def _build_swing_plan(
     low: pd.Series | None = None,
     last_price: float | None = None,
     notional_hkd: float = DEFAULT_NOTIONAL_HKD,
+    earnings_days_left: int | None = None,
 ) -> SwingHorizonPlan:
     thr = mode or MODE_THRESHOLDS["defensive"]
     risk_ps = None
@@ -1420,6 +1442,7 @@ def _build_swing_plan(
             against_trend=against_trend,
             weekly_allow_long=weekly_allow_long,
             notional_hkd=notional_hkd,
+            earnings_days_left=earnings_days_left,
         )
         verdict = tl["verdict"]
         note_bits = [
@@ -1879,13 +1902,24 @@ def build_trade_sop(
         events = None
 
     earnings_soon = bool(getattr(events, "near_earnings", False)) if events else False
-    if events is not None and not earnings_soon:
+    earnings_days_left: int | None = None
+    earnings_note = ""
+    if events is not None:
         for it in getattr(events, "items", []) or []:
-            if getattr(it, "name", "") == "财报日":
-                dleft = getattr(it, "days_left", None)
-                if dleft is not None and 0 <= int(dleft) <= 7:
-                    earnings_soon = True
-                    break
+            if getattr(it, "name", "") != "财报日":
+                continue
+            dleft = getattr(it, "days_left", None)
+            if dleft is not None:
+                try:
+                    earnings_days_left = int(dleft)
+                except (TypeError, ValueError):
+                    earnings_days_left = None
+            earnings_note = str(getattr(it, "detail", "") or "")
+            if earnings_days_left is not None and 0 <= earnings_days_left <= 14:
+                earnings_soon = True
+            break
+        if not earnings_note and getattr(events, "caution", None):
+            earnings_note = str(events.caution)
 
     chase_high = bool(
         quality.fifty_two_week_pct is not None and quality.fifty_two_week_pct >= 92
@@ -2103,6 +2137,7 @@ def build_trade_sop(
         low=low_for_path,
         last_price=float(last) if last is not None else None,
         notional_hkd=DEFAULT_NOTIONAL_HKD,
+        earnings_days_left=earnings_days_left,
     )
     swing_h1 = _build_swing_plan(
         key="h1",
@@ -2211,6 +2246,7 @@ def build_trade_sop(
         against_trend=bool(against_tr),
         weekly_allow_long=bool(weekly_allow),
         notional_hkd=DEFAULT_NOTIONAL_HKD,
+        earnings_days_left=earnings_days_left,
     )
     if THREE_LIGHT_SOP:
         primary.verdict = tl_main["verdict"]
@@ -2813,6 +2849,9 @@ def build_trade_sop(
         notional_hkd=float(tl_main["notional_hkd"]),
         pnl_if_win_hkd=tl_main["pnl_if_win_hkd"],
         pnl_if_loss_hkd=tl_main["pnl_if_loss_hkd"],
+        earnings_soon=bool(earnings_soon),
+        earnings_days_left=earnings_days_left,
+        earnings_note=earnings_note or "",
         stability_score=stab,
         stability_label=stab_label,
         side=side,
