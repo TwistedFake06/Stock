@@ -39,11 +39,20 @@
 3. 破止蚀走；到 T1 减半、止蚀保本
 4. 不摊平、不止蚀下移
 
+## 交易日志（永久样本）
+
+- 路径：`data/trade_journal.json`（平仓后仍保留，标记 sample）
+- 每日自动备份：`data/journal_backups/trade_journal_YYYYMMDD.json`
+- **投资SOP / 我已买入** 内有「交易日志」面板：写入、填出场价平仓、**导出 JSON/CSV**、导入合并
+- Cloud 重部署可能丢盘 → **每周导出一次 JSON 到自己电脑**
+- 可选环境变量 `TRADE_JOURNAL_PATH=C:\path\to\my_journal.json` 固定路径
+
 ## 每周
 
-- 对照交易日志：真实胜率、平均盈亏
+- 对照交易日志：真实胜率、平均盈亏、样本数
 - 只改执行问题（有没有追、有没有扛）
 - **不换系统、不加指标**
+- 导出备份日志
 
 ## 期望（写死）
 

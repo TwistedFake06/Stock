@@ -269,6 +269,9 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                                 if getattr(sop, "earnings_soon", False)
                                 else ""
                             ),
+                            "阻力": getattr(sop, "nearest_resistance", None),
+                            "支撑": getattr(sop, "nearest_support", None),
+                            "阻力%": getattr(sop, "resistance_pct", None),
                             "主周期": getattr(prim, "label", horizon_ui) if prim else horizon_ui,
                             "0-2周": getattr(h1, "verdict", "—") if h1 else "—",
                             "2-4周": getattr(h2, "verdict", "—") if h2 else "—",
@@ -427,6 +430,8 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                 "胜率灯",
                 "划算灯",
                 "一句话",
+                "阻力",
+                "支撑",
                 "财报天",
                 "现价",
                 "掛單",
@@ -443,6 +448,9 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                 "胜率灯",
                 "划算灯",
                 "一句话",
+                "阻力",
+                "支撑",
+                "阻力%",
                 "财报",
                 "财报天",
                 "现价",

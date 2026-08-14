@@ -712,15 +712,14 @@ class TestTradeSOPHelpers(unittest.TestCase):
         self.assertIn("持有", a.action)
 
     def test_journal_roundtrip(self):
-        # isolate temp journal by monkeypatch path would be ideal; use real file carefully
-        from trade_journal import JOURNAL_PATH
+        import os
         import tempfile
-        import trade_journal as tj
 
-        old = tj.JOURNAL_PATH
-        try:
-            with tempfile.TemporaryDirectory() as td:
-                tj.JOURNAL_PATH = Path(td) / "j.json"
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "j.json"
+            old = os.environ.get("TRADE_JOURNAL_PATH")
+            os.environ["TRADE_JOURNAL_PATH"] = str(path)
+            try:
                 save_trades([])
                 row = add_trade(
                     symbol="TEST",
@@ -736,12 +735,17 @@ class TestTradeSOPHelpers(unittest.TestCase):
                 closed = close_trade(row["id"], exit_price=12.0, exit_reason="t1")
                 self.assertIsNotNone(closed)
                 self.assertEqual(closed["status"], "closed")
+                self.assertTrue(closed.get("sample", True))
                 self.assertAlmostEqual(float(closed["result_r"]), 2.0, places=2)
                 st = journal_stats()
                 self.assertEqual(st["closed"], 1)
+                self.assertEqual(st["samples"], 1)
                 self.assertAlmostEqual(st["win_rate"], 100.0, places=0)
-        finally:
-            tj.JOURNAL_PATH = old
+            finally:
+                if old is None:
+                    os.environ.pop("TRADE_JOURNAL_PATH", None)
+                else:
+                    os.environ["TRADE_JOURNAL_PATH"] = old
 
     def test_expectancy(self):
         # 55% win, 2R reward → 0.55*2 - 0.45*1 = 0.65

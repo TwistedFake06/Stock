@@ -10,9 +10,9 @@ import pandas as pd
 import streamlit as st
 
 from stock_service import cache_bucket, cached_info
-from trade_journal import add_trade, close_trade, journal_stats, load_trades
 from trade_sop import build_trade_sop, format_win_rate
 from views.common import render_session_quote_card
+from views.journal_panel import render_journal_panel
 
 
 def _verdict_box(verdict: str):
@@ -199,7 +199,7 @@ def render_sop(
         else:
             st.warning(f"**财报：** {en}")
 
-    # 四个执行价（极简必看）
+    # 执行价位 + 阻力/支撑（极简必看）
     st.markdown("#### 执行价位")
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("掛單 E", _fmt(primary.entry_plan if primary else sop.entry_plan))
@@ -216,6 +216,31 @@ def render_sop(
             else "—"
         ),
     )
+    r1, r2 = st.columns(2)
+    nr = getattr(sop, "nearest_resistance", None)
+    ns = getattr(sop, "nearest_support", None)
+    r1.metric(
+        "最近阻力",
+        _fmt(nr),
+        (
+            f"上方 {sop.resistance_pct:+.1f}%"
+            if getattr(sop, "resistance_pct", None) is not None
+            else None
+        ),
+    )
+    r2.metric(
+        "最近支撑",
+        _fmt(ns),
+        (
+            f"下方 {sop.support_pct:+.1f}%"
+            if getattr(sop, "support_pct", None) is not None
+            else None
+        ),
+    )
+    if getattr(sop, "resistance_levels_txt", ""):
+        st.caption(f"上方阻力：{sop.resistance_levels_txt}")
+    if getattr(sop, "support_levels_txt", ""):
+        st.caption(f"下方支撑：{sop.support_levels_txt}")
     st.caption(
         f"入場区 {_fmt(primary.entry_low if primary else sop.entry_low)}–"
         f"{_fmt(primary.entry_high if primary else sop.entry_high)} · "
@@ -233,9 +258,42 @@ def render_sop(
     else:
         st.caption("无出场计划")
 
+    # 交易日志：始终显示（永久样本），极简也要能写
+    render_journal_panel(
+        key_prefix="sop_jr",
+        default_symbol=sop.symbol,
+        default_name=sop.name or sop.symbol,
+        default_horizon=primary.label if primary else "0–2周",
+        default_entry=(
+            float(primary.entry_plan)
+            if primary and primary.entry_plan
+            else float(sop.entry_plan or 0) or None
+        ),
+        default_stop=(
+            float(primary.stop_loss)
+            if primary and primary.stop_loss
+            else float(sop.stop_loss or 0) or None
+        ),
+        default_target=(
+            float(primary.target)
+            if primary and primary.target
+            else float(sop.target_t1 or 0) or None
+        ),
+        default_shares=int(sop.position_shares or 0),
+        default_wr=primary.win_rate_pct if primary else sop.win_rate_pct,
+        default_rr=(
+            (primary.rr_net or primary.rr) if primary else sop.rr_t1
+        ),
+        default_verdict=(primary.verdict if primary else sop.enter_ok) or "",
+        default_mode=getattr(sop, "mode", "") or "",
+        default_mode_label=getattr(sop, "mode_label", "") or "",
+        default_exit_px=float(sop.last_price) if sop.last_price else None,
+        expanded=True,
+    )
+
     if simple:
         st.caption(
-            "极简模式已开：辅助信号/清单/日志在下方折叠。关闭极简可看全文。"
+            "极简模式：上方日志可写样本；辅助信号/清单在下方折叠。"
         )
     else:
         # 完整明细
@@ -353,52 +411,6 @@ def render_sop(
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
         else:
             st.caption("无清单")
-
-    with st.expander("交易日志（实盘对照）", expanded=False):
-        stats = journal_stats()
-        j1, j2, j3, j4 = st.columns(4)
-        j1.metric("已平仓", stats.get("closed") or 0)
-        j2.metric(
-            "实盘胜率",
-            f"{stats['win_rate']:.0f}%" if stats.get("win_rate") is not None else "—",
-        )
-        j3.metric(
-            "平均R",
-            f"{stats['avg_r']:+.2f}" if stats.get("avg_r") is not None else "—",
-        )
-        j4.metric("持仓中", stats.get("open") or 0)
-        if primary and primary.entry_plan and primary.stop_loss:
-            if st.button("按主计划写入日志", key="sop_journal_add"):
-                add_trade(
-                    symbol=sop.symbol,
-                    name=sop.name,
-                    horizon=primary.label,
-                    entry=primary.entry_plan,
-                    stop=primary.stop_loss,
-                    target=primary.target,
-                    shares=int(sop.position_shares or 0),
-                    model_wr=primary.win_rate_pct,
-                    model_rr=primary.rr_net or primary.rr,
-                    model_verdict=primary.verdict,
-                    mode=getattr(sop, "mode", "") or "",
-                    mode_label=getattr(sop, "mode_label", "") or "",
-                    notes=f"模式={getattr(sop, 'mode_label', '')} · 胜率={_wr_text(primary)}",
-                )
-                st.success(f"已写入（模式 {getattr(sop, 'mode_label', '')}）")
-                st.rerun()
-        trades = load_trades()
-        open_t = [t for t in trades if t.get("status") == "open"][:8]
-        for t in open_t:
-            st.caption(
-                f"#{t.get('id')} {t.get('symbol')} "
-                f"[{t.get('mode_label') or t.get('mode') or '?'}] "
-                f"入{t.get('entry')} 止{t.get('stop')} "
-                f"目标{t.get('target')}"
-            )
-            if st.button(f"平仓 #{t.get('id')}", key=f"sop_close_{t.get('id')}"):
-                px = float(sop.last_price or t.get("entry") or 0)
-                close_trade(t["id"], exit_price=px, exit_reason="manual")
-                st.rerun()
 
     with st.expander("盘前盘后 / 时段", expanded=False):
         try:

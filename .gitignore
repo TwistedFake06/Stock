@@ -14,4 +14,6 @@ secrets.local.env
 *.local.env
 data/alert_state.json
 data/trade_journal.json
+data/trade_journal.json.tmp
+data/journal_backups/
 

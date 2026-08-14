@@ -212,6 +212,17 @@ class TradeSOP:
     earnings_soon: bool = False
     earnings_days_left: int | None = None
     earnings_note: str = ""
+    # 支撑 / 阻力（日线结构）
+    nearest_support: float | None = None
+    nearest_resistance: float | None = None
+    support_pct: float | None = None  # vs last, negative
+    resistance_pct: float | None = None  # vs last, positive
+    resistance_note: str = ""
+    support_note: str = ""
+    sr_summary: str = ""
+    # 上方阻力列表文案，如 "950(强); 980(中)"
+    resistance_levels_txt: str = ""
+    support_levels_txt: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +260,7 @@ STOP_ATR_FLOOR = 0.6  # 止损距离下限（ATR 倍数）
 
 # 部署指纹：Streamlit Cloud 侧栏应显示同一字串；否则仍是旧代码
 # v1 定版：三灯 + E/S/T + 极简 UI + 财报窗口盖帽（Yahoo 日历，无新 API）
-SOP_BUILD = "v1-stable-2026-08-earn"
+SOP_BUILD = "v1-stable-2026-08-sr"
 
 MODE_THRESHOLDS: dict[str, ModeThresholds] = {
     "defensive": ModeThresholds(
@@ -2750,8 +2761,62 @@ def build_trade_sop(
         else "数据仅供实盘辅助",
     ]
     notes.extend(structure_notes[:6])
-    if sr.nearest_support:
-        notes.append(f"近支撑 ≈ {sr.nearest_support:.2f} · 近阻力 ≈ {sr.nearest_resistance}")
+    # 支撑/阻力文案
+    resist_lvls = [
+        lv
+        for lv in (getattr(sr, "levels", None) or [])
+        if getattr(lv, "kind", "") == "阻力"
+        and last is not None
+        and getattr(lv, "price", 0) > float(last)
+    ]
+    support_lvls = [
+        lv
+        for lv in (getattr(sr, "levels", None) or [])
+        if getattr(lv, "kind", "") == "支撑"
+        and last is not None
+        and getattr(lv, "price", 0) < float(last)
+    ]
+    resist_lvls = sorted(resist_lvls, key=lambda x: float(x.price))[:4]
+    support_lvls = sorted(support_lvls, key=lambda x: float(x.price), reverse=True)[:4]
+    resistance_levels_txt = "；".join(
+        f"{float(lv.price):.2f}({lv.strength})" for lv in resist_lvls
+    )
+    support_levels_txt = "；".join(
+        f"{float(lv.price):.2f}({lv.strength})" for lv in support_lvls
+    )
+    nr = getattr(sr, "nearest_resistance", None)
+    ns = getattr(sr, "nearest_support", None)
+    up_pct = getattr(sr, "upside_pct", None)
+    dn_pct = getattr(sr, "downside_pct", None)
+    resistance_note = ""
+    support_note = ""
+    if nr is not None and last:
+        resistance_note = f"最近阻力 ≈ {float(nr):.2f}" + (
+            f"（现价上方约 {up_pct:+.1f}%）" if up_pct is not None else ""
+        )
+    if ns is not None and last:
+        support_note = f"最近支撑 ≈ {float(ns):.2f}" + (
+            f"（现价下方约 {dn_pct:+.1f}%）" if dn_pct is not None else ""
+        )
+    if ns is not None or nr is not None:
+        notes.append(
+            f"近支撑 ≈ {ns} · 近阻力 ≈ {nr}"
+            if ns is not None and nr is not None
+            else (support_note or resistance_note)
+        )
+    # T1 与阻力关系提示（不自动改 T，只提醒）
+    if (
+        nr is not None
+        and entry_plan is not None
+        and t1 is not None
+        and float(entry_plan) < float(nr) < float(t1)
+    ):
+        structure_notes.append(
+            f"T1={float(t1):.2f} 上方先遇阻力 {float(nr):.2f}，可考虑阻力位先减仓"
+        )
+        notes.append(
+            f"阻力提示：计划目标前有阻力 {float(nr):.2f}，短线可先看阻力"
+        )
     notes.extend(quality.notes[:4])
 
     status = free_data_status()
@@ -2773,6 +2838,15 @@ def build_trade_sop(
         decision_brief = tl_main["plain_card"]
         if structure_notes:
             decision_brief += "\n\n【结构优化】" + "；".join(structure_notes[:4])
+        if resistance_note or support_note:
+            decision_brief += (
+                "\n\n【支撑/阻力】"
+                + (resistance_note or "")
+                + ("；" if resistance_note and support_note else "")
+                + (support_note or "")
+            )
+            if resistance_levels_txt:
+                decision_brief += f"\n上方阻力：{resistance_levels_txt}"
         # 现价 vs 计划限价提示
         if (
             last is not None
@@ -2852,6 +2926,15 @@ def build_trade_sop(
         earnings_soon=bool(earnings_soon),
         earnings_days_left=earnings_days_left,
         earnings_note=earnings_note or "",
+        nearest_support=round(float(ns), 4) if ns is not None else None,
+        nearest_resistance=round(float(nr), 4) if nr is not None else None,
+        support_pct=round(float(dn_pct), 2) if dn_pct is not None else None,
+        resistance_pct=round(float(up_pct), 2) if up_pct is not None else None,
+        resistance_note=resistance_note,
+        support_note=support_note,
+        sr_summary=str(getattr(sr, "summary", "") or ""),
+        resistance_levels_txt=resistance_levels_txt,
+        support_levels_txt=support_levels_txt,
         stability_score=stab,
         stability_label=stab_label,
         side=side,

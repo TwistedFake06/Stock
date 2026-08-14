@@ -8,8 +8,8 @@ import streamlit as st
 
 from position_coach import advise_open_position
 from stock_service import cache_bucket, cached_info, fetch_history, normalize_symbol
-from trade_journal import add_trade
 from trade_sop import DEFAULT_NOTIONAL_HKD, build_trade_sop
+from views.journal_panel import render_journal_panel
 
 
 def _f(x: Any) -> float | None:
@@ -266,7 +266,7 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
             f"多空 **{bias_label}**（{bias_score:+.0f}）· 最多约 **{max_days}** 交易日"
         )
 
-        z1, z2, z3, z4, z5 = st.columns(5)
+        z1, z2, z3, z4, z5, z6 = st.columns(6)
         z1.metric(
             "计划限价 E",
             f"{plan_entry:.2f}" if plan_entry else "—",
@@ -279,12 +279,43 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
         z2.metric("计划止蚀 S", f"{plan_stop:.2f}" if plan_stop else "—")
         z3.metric("目标 T1", f"{plan_t1:.2f}" if plan_t1 else "—")
         z4.metric("目标 T2", f"{plan_t2:.2f}" if plan_t2 else "—")
-        rr_show = plan_rr_net if plan_rr_net is not None else plan_rr
+        nr = getattr(sop, "nearest_resistance", None) if sop else None
+        ns = getattr(sop, "nearest_support", None) if sop else None
         z5.metric(
-            "净R:R / 胜率",
-            f"{rr_show:.2f}" if rr_show is not None else "—",
-            plan_wr or None,
+            "最近阻力",
+            f"{float(nr):.2f}" if nr is not None else "—",
+            (
+                f"+{sop.resistance_pct:.1f}%"
+                if sop and getattr(sop, "resistance_pct", None) is not None
+                else None
+            ),
         )
+        z6.metric(
+            "最近支撑",
+            f"{float(ns):.2f}" if ns is not None else "—",
+            (
+                f"{sop.support_pct:+.1f}%"
+                if sop and getattr(sop, "support_pct", None) is not None
+                else None
+            ),
+        )
+        rr_show = plan_rr_net if plan_rr_net is not None else plan_rr
+        _cap = f"净R:R **{rr_show:.2f}**" if rr_show is not None else "净R:R —"
+        if plan_wr:
+            _cap += f" · 胜率 {plan_wr}"
+        if sop and getattr(sop, "resistance_levels_txt", ""):
+            _cap += f" · 上方阻力：{sop.resistance_levels_txt}"
+        st.caption(_cap)
+        # 价位尺加入阻力
+        if nr is not None:
+            st.caption(
+                f"对照：阻力 {float(nr):.2f}"
+                + (
+                    f" · 若 T1={float(plan_t1):.2f} 高于阻力，可先在阻力减仓"
+                    if plan_t1 and float(plan_t1) > float(nr)
+                    else ""
+                )
+            )
 
         # 你的成交 vs 计划
         st.markdown("#### 你的成交 vs 计划")
@@ -312,10 +343,14 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
         levels = []
         if plan_stop:
             levels.append(("止蚀 S", float(plan_stop)))
+        if ns is not None:
+            levels.append(("支撑", float(ns)))
         levels.append(("你的买入", buy_f))
         if plan_entry:
             levels.append(("计划E", float(plan_entry)))
         levels.append(("现价", last_f))
+        if nr is not None:
+            levels.append(("阻力", float(nr)))
         if plan_t1:
             levels.append(("T1", float(plan_t1)))
         if plan_t2:
@@ -425,22 +460,19 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
             "4. 禁止：摊平、下移止蚀、无计划死扛"
         )
 
-        if st.button("写入交易日志", key="hold_page_journal"):
-            add_trade(
-                symbol=sym,
-                name=str(name),
-                horizon=horizon_label,
-                entry=buy_f,
-                stop=float(advice.suggested_stop or plan_stop or buy_f * 0.97),
-                target=plan_t1,
-                shares=int(shares) if shares else 0,
-                model_verdict=advice.action,
-                notes=(
-                    f"持仓页:{advice.action}; 现价{last_f}; "
-                    f"计划E={plan_entry}; S={plan_stop}; T1={plan_t1}; {pick_why}"
-                ),
-                opened=buy_date.isoformat() if buy_date else None,
-            )
-            st.success("已写入日志")
+        render_journal_panel(
+            key_prefix="hold_jr",
+            default_symbol=sym,
+            default_name=str(name),
+            default_horizon=horizon_label,
+            default_entry=buy_f,
+            default_stop=float(advice.suggested_stop or plan_stop or buy_f * 0.97),
+            default_target=float(plan_t1) if plan_t1 else None,
+            default_shares=int(shares) if shares else 0,
+            default_verdict=advice.action,
+            default_exit_px=last_f,
+            expanded=True,
+        )
     else:
         st.info("👆 填好买入价后，会自动加载最优计划价位与持仓建议。")
+        render_journal_panel(key_prefix="hold_jr_empty", expanded=False)
