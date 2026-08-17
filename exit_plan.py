@@ -15,7 +15,7 @@ from typing import Any
 
 
 # Round-trip friction assumptions for "executable" R:R (US equities retail-ish)
-DEFAULT_SLIP_PCT = 0.0015  # 0.15% per side rough (spread + slip)
+DEFAULT_SLIP_PCT = 0.0030  # 0.30% per side（更贴近零售成交；原 0.15% 偏乐观）
 
 
 @dataclass

@@ -309,11 +309,12 @@ class TestTradeSOPHelpers(unittest.TestCase):
     def test_mode_thresholds(self):
         d = get_mode_thresholds("defensive")
         a = get_mode_thresholds("B")
-        self.assertEqual(d.wr_full, 52.0)  # 中鬆
-        self.assertEqual(d.rr_full, 1.10)
+        # v1-realism-2026-08-18 收紧门槛
+        self.assertEqual(d.wr_full, 54.0)
+        self.assertEqual(d.rr_full, 1.15)
         self.assertEqual(a.key, "aggressive")
-        self.assertEqual(a.wr_full, 50.0)
-        self.assertEqual(a.wr_half, 45.0)
+        self.assertEqual(a.wr_full, 52.0)
+        self.assertEqual(a.wr_half, 48.0)
         self.assertEqual(a.default_risk_units_full, 0.5)
 
     def test_decision_brief_has_verdict_and_reasons(self):

@@ -319,7 +319,7 @@ class ModeThresholds:
 # 已关闭「只看胜率」实验，避免与净 R:R 后置降级互相打架
 THREE_LIGHT_SOP = True
 ENTRY_BY_WR_ONLY = False  # 废弃实验；保留开关仅兼容旧测试
-MIN_PATH_SAMPLES_FOR_RATE = 1  # 有 1 笔已结算路径即可给出胜率%
+MIN_PATH_SAMPLES_FOR_RATE = 6  # 至少 6 笔才显示 %（原 1 过宽，实盘易虚高）
 RR_YELLOW_FLOOR = 0.80  # 净 R:R 黄灯下限；低于此 = 红灯不划算
 DEFAULT_NOTIONAL_HKD = 5000.0
 # E/S/T 可执行结构（Phase 2）
@@ -329,21 +329,21 @@ STOP_ATR_CAP = 1.5  # 止损距离上限（ATR 倍数）
 STOP_ATR_FLOOR = 0.6  # 止损距离下限（ATR 倍数）
 
 # 部署指纹：Streamlit Cloud 侧栏应显示同一字串；否则仍是旧代码
-# v1 定版：三灯 + E/S/T + 极简 UI + 财报窗口盖帽 + 持仓入场日/即时双计划
-SOP_BUILD = "v1-stable-2026-08-hold-one"
+# v1-realism：路径胜率更保守 + 样本门槛上调 + ATR prefer_structure + 滑点 0.30%
+SOP_BUILD = "v1-realism-2026-08-18"
 
 MODE_THRESHOLDS: dict[str, ModeThresholds] = {
     "defensive": ModeThresholds(
         key="defensive",
         label="A 防守版",
-        wr_full=52.0,
-        wr_half=48.0,
-        stab_full=45.0,
-        stab_half=38.0,
-        rr_full=1.10,
-        rr_half=0.95,
-        exp_full=0.12,
-        exp_half=0.03,
+        wr_full=54.0,  # 原 52 → 满仓门槛
+        wr_half=50.0,  # 原 48 → 试仓也要 ≥50%
+        stab_full=48.0,
+        stab_half=42.0,
+        rr_full=1.15,  # 原 1.10
+        rr_half=1.00,  # 原 0.95
+        exp_full=0.15,
+        exp_half=0.05,
         max_hold_h1=12,
         max_hold_h2=20,
         default_risk_units_full=1.0,
@@ -351,14 +351,14 @@ MODE_THRESHOLDS: dict[str, ModeThresholds] = {
     "aggressive": ModeThresholds(
         key="aggressive",
         label="B 进攻版",
-        wr_full=50.0,
-        wr_half=45.0,
-        stab_full=25.0,
-        stab_half=22.0,
-        rr_full=1.00,
-        rr_half=0.90,
-        exp_full=0.08,
-        exp_half=0.0,
+        wr_full=52.0,  # 原 50
+        wr_half=48.0,  # 原 45
+        stab_full=30.0,
+        stab_half=25.0,
+        rr_full=1.05,
+        rr_half=0.95,
+        exp_full=0.10,
+        exp_half=0.02,
         max_hold_h1=10,
         max_hold_h2=15,
         default_risk_units_full=0.5,
@@ -377,9 +377,9 @@ def get_mode_thresholds(mode: str) -> ModeThresholds:
 
 # Path WR quality tiers（优化后）
 PATH_LOOKBACK_DEFAULT = 180
-MIN_SAMPLES_FULL = 12  # 可支撑「可以入場」
-MIN_SAMPLES_LOW = 8  # 显示胜率，最多试仓
-MIN_SAMPLES_BLEND = 5  # 与 day_wr 混合的最低路径样本
+MIN_SAMPLES_FULL = 15  # 可支撑「可以入場」（原 12）
+MIN_SAMPLES_LOW = 10  # 显示胜率，最多试仓（原 8）
+MIN_SAMPLES_BLEND = 7  # 与 day_wr 混合的最低路径样本（原 5）
 
 
 def format_win_rate(
@@ -594,7 +594,12 @@ def _path_win_rate_detail(
                     hit_t = True
                     break
         if ambiguous or (not hit_t and not hit_s):
-            continue  # timeout / 歧义 — 不计入
+            if ambiguous:
+                continue  # 同 bar 歧义不计入（避免武断）
+            # timeout：计 0.4 胜（保守折中，避免全丢压低/抬高失真）
+            total += 1
+            wins += 0.4
+            continue
         total += 1
         if hit_t:
             wins += 1
@@ -716,6 +721,9 @@ def compute_wr_light(
     """胜率灯。"""
     if wr is None:
         return "red", "算不出路径胜率（样本/结构不足）"
+    # 低样本强制保守（实盘勿轻信）
+    if samples is not None and samples < MIN_SAMPLES_LOW:
+        return "red", f"路径胜率样本不足（仅{int(samples)}笔），暂缓"
     note_n = f"，样本{int(samples)}" if samples else ""
     if wr >= thr.wr_full:
         return "green", f"历史路径胜率约 {wr:.0f}%（达满仓线 {thr.wr_full:.0f}%{note_n}）"
@@ -784,8 +792,12 @@ def cap_stop_by_atr(
     *,
     cap_mult: float = STOP_ATR_CAP,
     floor_mult: float = STOP_ATR_FLOOR,
+    prefer_structure: bool = True,  # 只收紧过宽；默认不强制放宽结构止蚀
 ) -> tuple[float | None, str]:
-    """止损距离用 ATR 上下限夹住：太宽收紧、太近略放。"""
+    """止损距离用 ATR 上下限夹住：太宽收紧、太近略放。
+
+    prefer_structure=True（默认）：只在「止蚀过宽」时收紧，不把结构止蚀强制放宽。
+    """
     if entry is None or stop is None:
         return stop, ""
     e, s = float(entry), float(stop)
@@ -801,7 +813,8 @@ def cap_stop_by_atr(
     if risk > max_risk + 1e-9:
         s = e - max_risk
         notes.append(f"止损过宽→按{cap_mult:.1f}×ATR收紧至{s:.2f}")
-    if e - s < min_risk - 1e-9:
+    # 过近：仅 prefer_structure=False 才强制放宽（保留结构止蚀）
+    elif (not prefer_structure) and (e - s < min_risk - 1e-9):
         s = e - min_risk
         notes.append(f"止损过近→按{floor_mult:.1f}×ATR放宽至{s:.2f}")
     return round(s, 4), "；".join(notes)

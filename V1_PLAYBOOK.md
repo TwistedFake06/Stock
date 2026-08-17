@@ -1,6 +1,6 @@
 # v1 定版操作手册（冻结功能）
 
-**Build：** `v1-stable-2026-08-hold-one`  
+**Build：** `v1-realism-2026-08-18`  
 **决定：** 功能够用；**不新接 API**；只用好 Yahoo K线 + 财报日历 +（可选）FRED/Finnhub；专注执行与日志。
 
 ## 免费数据（已定）
