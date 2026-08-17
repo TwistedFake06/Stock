@@ -112,6 +112,13 @@ def render_watchlist(period: str, interval: str) -> None:
             st.rerun()
 
     if st.button("恢复默认自选"):
-        st.session_state.watchlist = list(DEFAULT_WATCHLIST)
+        try:
+            from stock_service import QUICK_PIN
+
+            pins = list(QUICK_PIN)
+        except Exception:
+            pins = ["MU", "SNDK"]
+        rest = [x for x in DEFAULT_WATCHLIST if x not in pins]
+        st.session_state.watchlist = pins + rest
         save_watchlist(st.session_state.watchlist)
         st.rerun()

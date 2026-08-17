@@ -112,11 +112,22 @@ except Exception:
     _SOP_BUILD = "legacy-no-build"
 
 # ---- session state ----
+def _ensure_quick_pins(wl: list) -> list:
+    """Keep MU / SNDK (QUICK_PIN) at front of watchlist for one-tap select."""
+    try:
+        from stock_service import QUICK_PIN as _pins
+    except Exception:
+        _pins = ["MU", "SNDK"]
+    pins = [normalize_symbol(p) for p in _pins if p]
+    rest = [s for s in filter_us_only(list(wl or [])) if s not in pins]
+    return filter_us_only(pins + rest)
+
+
 if "watchlist" not in st.session_state:
-    st.session_state.watchlist = load_watchlist()
+    st.session_state.watchlist = _ensure_quick_pins(load_watchlist())
 else:
     # Drop non-US from quick-select / saved list only (manual symbol stays free)
-    st.session_state.watchlist = filter_us_only(list(st.session_state.watchlist))
+    st.session_state.watchlist = _ensure_quick_pins(st.session_state.watchlist)
 
 if "symbol" not in st.session_state or not str(st.session_state.symbol).strip():
     st.session_state.symbol = st.session_state.watchlist[0]
@@ -289,11 +300,43 @@ with st.sidebar:
 
     st.divider()
     st.markdown("**快速选择**")
-    cols = st.columns(2)
-    for i, s in enumerate(st.session_state.watchlist[:12]):
-        if cols[i % 2].button(s, key=f"quick_{s}", use_container_width=True):
+    try:
+        from stock_service import QUICK_PIN
+    except Exception:
+        QUICK_PIN = ["MU", "SNDK"]
+    pin_syms = [normalize_symbol(p) for p in QUICK_PIN]
+    # 常用：MU / SNDK 固定第一行（一眼点进 SOP）
+    st.caption("常用")
+    pin_cols = st.columns(len(pin_syms) if pin_syms else 2)
+    for i, s in enumerate(pin_syms):
+        if pin_cols[i].button(
+            s,
+            key=f"quick_pin_{s}",
+            use_container_width=True,
+            type="primary",
+        ):
+            # 确保在自选里
+            if s not in st.session_state.watchlist:
+                st.session_state.watchlist = _ensure_quick_pins(
+                    list(st.session_state.watchlist) + [s]
+                )
+                try:
+                    from views.common import save_watchlist
+
+                    save_watchlist(st.session_state.watchlist)
+                except Exception:
+                    pass
             _request_symbol(s, open_sop=True)
             st.rerun()
+    # 其余自选（不含已显示的 pin，避免重复 key）
+    rest = [s for s in st.session_state.watchlist if s not in pin_syms][:10]
+    if rest:
+        st.caption("自选")
+        cols = st.columns(2)
+        for i, s in enumerate(rest):
+            if cols[i % 2].button(s, key=f"quick_{s}", use_container_width=True):
+                _request_symbol(s, open_sop=True)
+                st.rerun()
 
     st.divider()
     st.caption("本金默认 5万 HKD · 非投资建议")

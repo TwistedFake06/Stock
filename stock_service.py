@@ -10,7 +10,11 @@ import pandas as pd
 import yfinance as yf
 
 # US-only quick list (no HK / A-share)
+# 常用置顶：MU / SNDK（侧栏快速选择优先显示）
+QUICK_PIN = ["MU", "SNDK"]
 DEFAULT_WATCHLIST = [
+    "MU",
+    "SNDK",
     "AAPL",
     "MSFT",
     "NVDA",
@@ -23,7 +27,9 @@ DEFAULT_WATCHLIST = [
     "AMD",
     "QCOM",
     "ORCL",
-    "MU",
+    "VRT",
+    "SMCI",
+    "NFLX",
 ]
 
 

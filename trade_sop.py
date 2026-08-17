@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any
 
 import numpy as np
@@ -223,6 +224,75 @@ class TradeSOP:
     # 上方阻力列表文案，如 "950(强); 980(中)"
     resistance_levels_txt: str = ""
     support_levels_txt: str = ""
+    # 若用历史切片重建计划：YYYY-MM-DD；None/空 = 即时（最新 bar）
+    as_of: str | None = None
+
+
+def parse_as_of_date(as_of: Any) -> date | None:
+    """Parse buy / snapshot date from date | datetime | 'YYYY-MM-DD'."""
+    if as_of is None or as_of == "":
+        return None
+    if isinstance(as_of, datetime):
+        return as_of.date()
+    if isinstance(as_of, date):
+        return as_of
+    s = str(as_of).strip()[:10]
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def slice_ohlcv_as_of(hist: pd.DataFrame, as_of: date | datetime | str) -> pd.DataFrame:
+    """
+    Keep bars with session date <= as_of (inclusive).
+    Used to rebuild entry-day E/S/T1/T2/SR without look-ahead.
+
+    Supports yfinance frames with a ``Date`` / ``Datetime`` column (RangeIndex)
+    or a DatetimeIndex.
+    """
+    if hist is None or getattr(hist, "empty", True):
+        return hist if hist is not None else pd.DataFrame()
+    d = parse_as_of_date(as_of)
+    if d is None:
+        return hist
+    try:
+        ts: pd.Series | None = None
+        for col in ("Date", "Datetime", "date", "datetime"):
+            if col in hist.columns:
+                ts = pd.to_datetime(hist[col], utc=False, errors="coerce")
+                break
+        if ts is None:
+            # DatetimeIndex path
+            idx = pd.DatetimeIndex(hist.index)
+            if len(idx) == 0 or not isinstance(hist.index, pd.DatetimeIndex):
+                # RangeIndex without Date column — cannot slice safely
+                if not isinstance(hist.index, pd.DatetimeIndex):
+                    return hist
+            ts = pd.Series(idx, index=hist.index)
+
+        # Normalize to calendar date (US session if tz-aware)
+        def _to_d(x: Any) -> date | None:
+            if x is None or (isinstance(x, float) and x != x):
+                return None
+            t = pd.Timestamp(x)
+            if pd.isna(t):
+                return None
+            if t.tzinfo is not None:
+                try:
+                    t = t.tz_convert("America/New_York")
+                except Exception:
+                    t = t.tz_localize(None) if t.tzinfo else t
+            return t.date()
+
+        bar_dates = ts.map(_to_d)
+        mask = bar_dates.map(lambda x: x is not None and x <= d)
+        out = hist.loc[mask].copy()
+        # Stable integer index after filter (downstream often uses iloc)
+        out = out.reset_index(drop=True)
+        return out if out is not None else pd.DataFrame()
+    except Exception:
+        return hist
 
 
 # ---------------------------------------------------------------------------
@@ -259,8 +329,8 @@ STOP_ATR_CAP = 1.5  # 止损距离上限（ATR 倍数）
 STOP_ATR_FLOOR = 0.6  # 止损距离下限（ATR 倍数）
 
 # 部署指纹：Streamlit Cloud 侧栏应显示同一字串；否则仍是旧代码
-# v1 定版：三灯 + E/S/T + 极简 UI + 财报窗口盖帽（Yahoo 日历，无新 API）
-SOP_BUILD = "v1-stable-2026-08-sr"
+# v1 定版：三灯 + E/S/T + 极简 UI + 财报窗口盖帽 + 持仓入场日/即时双计划
+SOP_BUILD = "v1-stable-2026-08-hold-dual2"
 
 MODE_THRESHOLDS: dict[str, ModeThresholds] = {
     "defensive": ModeThresholds(
@@ -1789,6 +1859,7 @@ def build_trade_sop(
     primary_horizon: str = "h1",
     mode: str = "defensive",
     force_defensive: bool = False,
+    as_of: date | datetime | str | None = None,
 ) -> TradeSOP:
     """
     Full SOP for one symbol (short-term swing playbook).
@@ -1798,15 +1869,26 @@ def build_trade_sop(
 
     mode: ``defensive`` (A 防守版) | ``aggressive`` (B 进攻版)
     force_defensive: 连续亏损等场景由 UI/日志强制 A
+    as_of: 若提供，仅用该日及之前的日线重建计划（入场日锁定 E/S/T/阻力），
+           不含未来 K 线；1H/新闻等「今日实时」信号会跳过。
     """
     sym = normalize_symbol(symbol)
+    as_of_d = parse_as_of_date(as_of)
+    as_of_str = as_of_d.isoformat() if as_of_d else None
+    # 历史切片需要更长窗口，保证 as_of 前仍有足够 lookback
+    fetch_period = period
+    if as_of_d is not None and period in ("6mo", "1y", "ytd", "3mo"):
+        fetch_period = "2y"
     info = cached_info(sym, cache_bucket(5))
-    hist = fetch_history(sym, period=period, interval=interval)
+    hist = fetch_history(sym, period=fetch_period, interval=interval)
     name = (
         (info or {}).get("shortName")
         or (info or {}).get("longName")
         or sym
     )
+
+    if hist is not None and not hist.empty and as_of_d is not None:
+        hist = slice_ohlcv_as_of(hist, as_of_d)
 
     if hist is None or hist.empty or "Close" not in hist.columns:
         return TradeSOP(
@@ -1831,11 +1913,16 @@ def build_trade_sop(
             position_shares=0,
             position_note="无行情数据",
             actions_now=["检查代码 / 网络 / 稍后再试"],
-            summary="无法拉取历史数据，SOP 不可用。",
+            summary=(
+                f"无法拉取 {as_of_str} 及以前的历史数据，SOP 不可用。"
+                if as_of_str
+                else "无法拉取历史数据，SOP 不可用。"
+            ),
             period=period,
             mode=get_mode_thresholds(mode).key,
             mode_label=get_mode_thresholds(mode).label,
             win_rate_display="样本不足",
+            as_of=as_of_str,
         )
 
     df = enrich(hist)
@@ -1849,17 +1936,22 @@ def build_trade_sop(
     rets = compute_returns(df)
 
     # Free market regime + optional Alpha Vantage (funda fill + news sentiment)
-    try:
-        regime = get_market_regime()
-    except Exception:
-        regime = None
+    # 历史 as_of：跳过「今日」宏观/新闻，避免用未来信息污染入场日计划
+    regime = None
+    news = None
+    if as_of_d is None:
+        try:
+            regime = get_market_regime()
+        except Exception:
+            regime = None
 
     info_use = dict(info or {})
     av_filled: list[str] = []
-    try:
-        info_use, av_filled = merge_av_overview_into_info(info_use, sym)
-    except Exception:
-        av_filled = []
+    if as_of_d is None:
+        try:
+            info_use, av_filled = merge_av_overview_into_info(info_use, sym)
+        except Exception:
+            av_filled = []
 
     targets = analyze_targets(df, info=info_use, entry=entry)
     funda = analyze_fundamentals(info_use)
@@ -1869,10 +1961,11 @@ def build_trade_sop(
         quality.notes.append(
             f"Alpha Vantage 补全 {len(av_filled)} 项基本面字段（仅填 yfinance 缺失）"
         )
-    try:
-        news = get_news_pulse(sym)
-    except Exception:
-        news = None
+    if as_of_d is None:
+        try:
+            news = get_news_pulse(sym)
+        except Exception:
+            news = None
 
     # Soft note from news sentiment (Alpha Vantage)
     if news and getattr(news, "available", False) and news.sentiment_score is not None:
@@ -1885,7 +1978,9 @@ def build_trade_sop(
     bench_sym, bench_label = default_benchmark(sym)
     bench = None
     try:
-        bench = fetch_history(bench_sym, period=period, interval=interval)
+        bench = fetch_history(bench_sym, period=fetch_period, interval=interval)
+        if as_of_d is not None and bench is not None and not bench.empty:
+            bench = slice_ohlcv_as_of(bench, as_of_d)
         rs = analyze_relative_strength(
             hist, bench, benchmark=bench_sym, bench_label=bench_label
         )
@@ -1941,18 +2036,27 @@ def build_trade_sop(
     stop = entry.stop_loss
 
     # 多周期：周线过滤 + ADX + Fib  refinement + 1H 触发
+    # as_of 历史切片：只用当日已收盘日线做 ADX/Fib，跳过会拉「今日」周线/1H 的接口
     weekly = adx_r = fib_r = h1_r = None
     fib_note = ""
     try:
-        mtf = mtf_bundle(sym, df, e_low, e_high)
-        weekly = mtf.get("weekly")
-        adx_r = mtf.get("adx")
-        fib_r = mtf.get("fib")
-        h1_r = mtf.get("h1")
-        fib_note = str(mtf.get("fib_note") or "")
-        if mtf.get("entry_low") is not None and mtf.get("entry_high") is not None:
-            e_low = mtf["entry_low"]
-            e_high = mtf["entry_high"]
+        if as_of_d is not None:
+            from mtf_signals import analyze_adx, analyze_fib_levels, merge_entry_with_fib
+
+            adx_r = analyze_adx(df)
+            fib_r = analyze_fib_levels(df)
+            e_low, e_high, fib_note = merge_entry_with_fib(e_low, e_high, fib_r)
+            fib_note = str(fib_note or "")
+        else:
+            mtf = mtf_bundle(sym, df, e_low, e_high)
+            weekly = mtf.get("weekly")
+            adx_r = mtf.get("adx")
+            fib_r = mtf.get("fib")
+            h1_r = mtf.get("h1")
+            fib_note = str(mtf.get("fib_note") or "")
+            if mtf.get("entry_low") is not None and mtf.get("entry_high") is not None:
+                e_low = mtf["entry_low"]
+                e_high = mtf["entry_high"]
     except Exception:
         pass
 
@@ -2047,8 +2151,9 @@ def build_trade_sop(
         rr = reward_ps / risk_ps
 
     # 路径用已收盘日线（去掉未完成当日 bar）+ High/Low 触价
+    # as_of 历史日：最后一根已是当日收盘，不必再丢
     path_df = df
-    if len(path_df) >= 40:
+    if as_of_d is None and len(path_df) >= 40:
         try:
             from market_session import us_session_clock
 
@@ -2935,6 +3040,7 @@ def build_trade_sop(
         sr_summary=str(getattr(sr, "summary", "") or ""),
         resistance_levels_txt=resistance_levels_txt,
         support_levels_txt=support_levels_txt,
+        as_of=as_of_str,
         stability_score=stab,
         stability_label=stab_label,
         side=side,

@@ -1,12 +1,13 @@
 """Dedicated page: I already bought — hold / take-profit / stop advice."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
 import streamlit as st
 
-from position_coach import advise_open_position
+from position_coach import advise_dual_hold
 from stock_service import cache_bucket, cached_info, fetch_history, normalize_symbol
 from trade_sop import DEFAULT_NOTIONAL_HKD, build_trade_sop
 from views.journal_panel import render_journal_panel
@@ -84,12 +85,221 @@ def pick_best_hold_plan(
     return h1, h2, getattr(h1, "label", "0–2周") or "0–2周", why
 
 
+@dataclass
+class HoldLevels:
+    """Extracted E/S/T1/T2/SR for hold dual view (entry-day or live)."""
+
+    tag: str  # entry | live
+    as_of: str  # YYYY-MM-DD or "即时"
+    close: float | None
+    entry_plan: float | None
+    zone_lo: float | None
+    zone_hi: float | None
+    stop: float | None
+    t1: float | None
+    t2: float | None
+    resistance: float | None
+    support: float | None
+    resistance_txt: str = ""
+    support_txt: str = ""
+    resistance_pct: float | None = None
+    support_pct: float | None = None
+    verdict: str = "—"
+    wr_display: str | None = None
+    rr: float | None = None
+    rr_net: float | None = None
+    bias: str = "—"
+    bias_score: float = 0.0
+    horizon_label: str = "0–2周"
+    pick_why: str = ""
+    max_days: int = 10
+    structure_bits: list[str] | None = None
+
+
+def extract_hold_levels(
+    sop: Any,
+    *,
+    prefer: str = "auto",
+    tag: str = "live",
+) -> HoldLevels:
+    """Pull ordered T1/T2 + SR from a TradeSOP (live or as_of)."""
+    primary, secondary, horizon_label, pick_why = pick_best_hold_plan(sop, prefer=prefer)
+    plan_stop = plan_t1 = plan_t2 = plan_entry = None
+    plan_zone_lo = plan_zone_hi = None
+    plan_rr = plan_rr_net = plan_wr = None
+    plan_verdict = "—"
+    max_days = 10
+    if primary:
+        plan_stop = _f(primary.stop_loss)
+        plan_t1 = _f(primary.target)
+        plan_entry = _f(primary.entry_plan)
+        plan_zone_lo = _f(primary.entry_low)
+        plan_zone_hi = _f(primary.entry_high)
+        plan_rr = _f(primary.rr)
+        plan_rr_net = _f(primary.rr_net)
+        plan_wr = getattr(primary, "win_rate_display", None) or (
+            f"{primary.win_rate_pct:.0f}%"
+            if getattr(primary, "win_rate_pct", None) is not None
+            else None
+        )
+        plan_verdict = primary.verdict or "—"
+        max_days = int(getattr(primary, "bars", None) or 10)
+    if secondary and getattr(secondary, "target", None) is not None:
+        plan_t2 = _f(secondary.target)
+    ta, tb = plan_t1, plan_t2
+    if ta is not None and tb is not None:
+        plan_t1, plan_t2 = min(ta, tb), max(ta, tb)
+    elif ta is not None:
+        plan_t1, plan_t2 = ta, None
+    elif tb is not None:
+        plan_t1, plan_t2 = tb, None
+    # Prefer SOP top-level T1/T2 if present (already ordered)
+    st1, st2 = _f(getattr(sop, "target_t1", None)), _f(getattr(sop, "target_t2", None))
+    if st1 is not None and st2 is not None:
+        plan_t1, plan_t2 = min(st1, st2), max(st1, st2)
+    elif st1 is not None and plan_t1 is None:
+        plan_t1 = st1
+    elif st2 is not None and plan_t2 is None:
+        plan_t2 = st2
+    exit_pl = getattr(sop, "exit_plan", None)
+    if exit_pl and getattr(exit_pl, "max_hold_days", None):
+        max_days = int(exit_pl.max_hold_days)
+
+    structure_bits: list[str] = []
+    if getattr(sop, "notes", None):
+        for n in sop.notes:
+            if any(
+                k in str(n)
+                for k in ("计划限价", "止损", "目标", "E=", "ATR", "1:1", "阻力")
+            ):
+                structure_bits.append(str(n))
+                if len(structure_bits) >= 4:
+                    break
+
+    as_of_raw = getattr(sop, "as_of", None)
+    as_of_label = str(as_of_raw) if as_of_raw else ("即时" if tag == "live" else "—")
+
+    return HoldLevels(
+        tag=tag,
+        as_of=as_of_label,
+        close=_f(getattr(sop, "last_price", None)),
+        entry_plan=plan_entry or _f(getattr(sop, "entry_plan", None)),
+        zone_lo=plan_zone_lo or _f(getattr(sop, "entry_low", None)),
+        zone_hi=plan_zone_hi or _f(getattr(sop, "entry_high", None)),
+        stop=plan_stop or _f(getattr(sop, "stop_loss", None)),
+        t1=plan_t1,
+        t2=plan_t2,
+        resistance=_f(getattr(sop, "nearest_resistance", None)),
+        support=_f(getattr(sop, "nearest_support", None)),
+        resistance_txt=str(getattr(sop, "resistance_levels_txt", "") or ""),
+        support_txt=str(getattr(sop, "support_levels_txt", "") or ""),
+        resistance_pct=_f(getattr(sop, "resistance_pct", None)),
+        support_pct=_f(getattr(sop, "support_pct", None)),
+        verdict=plan_verdict,
+        wr_display=plan_wr,
+        rr=plan_rr,
+        rr_net=plan_rr_net,
+        bias=str(getattr(sop, "bias", None) or "—"),
+        bias_score=float(getattr(sop, "bias_score", None) or 0),
+        horizon_label=horizon_label,
+        pick_why=pick_why,
+        max_days=max_days,
+        structure_bits=structure_bits,
+    )
+
+
+def _fmt(v: float | None, digits: int = 2) -> str:
+    if v is None:
+        return "—"
+    return f"{v:.{digits}f}"
+
+
+def _render_levels_card(lv: HoldLevels, *, title: str, subtitle: str) -> None:
+    st.markdown(f"#### {title}")
+    st.caption(subtitle)
+    st.caption(
+        f"周期 **{lv.horizon_label}** · 结论 **{lv.verdict}** · "
+        f"多空 **{lv.bias}**（{lv.bias_score:+.0f}）· "
+        f"最多约 **{lv.max_days}** 交易日"
+        + (f" · 当日收 {lv.close:.2f}" if lv.close is not None else "")
+    )
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric(
+        "计划限价 E",
+        _fmt(lv.entry_plan),
+        (
+            f"区 {_fmt(lv.zone_lo)}–{_fmt(lv.zone_hi)}"
+            if lv.zone_lo is not None and lv.zone_hi is not None
+            else None
+        ),
+    )
+    c2.metric("止蚀 S", _fmt(lv.stop))
+    c3.metric("目标 T1", _fmt(lv.t1))
+    c4.metric("目标 T2", _fmt(lv.t2))
+    c5.metric(
+        "最近阻力",
+        _fmt(lv.resistance),
+        f"+{lv.resistance_pct:.1f}%" if lv.resistance_pct is not None else None,
+    )
+    c6.metric(
+        "最近支撑",
+        _fmt(lv.support),
+        f"{lv.support_pct:+.1f}%" if lv.support_pct is not None else None,
+    )
+    bits: list[str] = []
+    rr_show = lv.rr_net if lv.rr_net is not None else lv.rr
+    if rr_show is not None:
+        bits.append(f"净R:R **{rr_show:.2f}**")
+    if lv.wr_display:
+        bits.append(f"胜率 {lv.wr_display}")
+    if lv.resistance_txt:
+        bits.append(f"上方阻力：{lv.resistance_txt}")
+    if lv.support_txt:
+        bits.append(f"下方支撑：{lv.support_txt}")
+    if bits:
+        st.caption(" · ".join(bits))
+    if lv.resistance is not None and lv.t1 is not None and lv.t1 > lv.resistance:
+        st.caption(
+            f"提示：T1={lv.t1:.2f} 高于最近阻力 {lv.resistance:.2f}，"
+            "短线可先在阻力减仓，站稳再看 T1"
+        )
+    if lv.pick_why:
+        st.caption(lv.pick_why)
+
+
+def _levels_ruler(lv: HoldLevels, *, buy: float | None = None, last: float | None = None) -> str:
+    levels: list[tuple[str, float]] = []
+    if lv.stop is not None:
+        levels.append(("止蚀S", lv.stop))
+    if lv.support is not None:
+        levels.append(("支撑", lv.support))
+    if buy is not None:
+        levels.append(("你的买入", buy))
+    if lv.entry_plan is not None:
+        levels.append(("计划E", lv.entry_plan))
+    if last is not None:
+        levels.append(("现价", last))
+    if lv.close is not None and (last is None or abs(lv.close - (last or 0)) > 1e-6):
+        if lv.tag == "entry":
+            levels.append(("入场日收", lv.close))
+    if lv.resistance is not None:
+        levels.append(("阻力", lv.resistance))
+    if lv.t1 is not None:
+        levels.append(("T1", lv.t1))
+    if lv.t2 is not None:
+        levels.append(("T2", lv.t2))
+    levels_sorted = sorted(levels, key=lambda x: x[1])
+    return "  <  ".join(f"**{n}** {v:.2f}" for n, v in levels_sorted)
+
+
 def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> None:
     """Always-visible buy-price coach (does not depend on long tabs)."""
     st.markdown("# 💰 我已买入")
     st.markdown(
-        f"股票 **`{symbol}`** · 填你的**成交买入价**，系统选出 **最优短线计划** "
-        "（止蚀 / T1 / T2），再对照现价建议 **持有 / 止盈 / 止蚀**。"
+        f"股票 **`{symbol}`** · 填**买入价 + 买入日期** → 系统同时给出：\n"
+        "1. **入场日计划**（按买入当天及以前 K 线算的 E / 止蚀 / T1 / T2 / 阻力 / 支撑）\n"
+        "2. **即时计划**（按最新行情重算）\n"
+        "再对照现价建议 **持有 / 止盈 / 止蚀**。"
     )
 
     sym = normalize_symbol(symbol)
@@ -135,19 +345,24 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
             key="hold_page_shares",
         )
     with c3:
+        default_buy_date = st.session_state.get(f"hold_dt_{sym}", date.today())
+        if not isinstance(default_buy_date, date):
+            default_buy_date = date.today()
         buy_date = st.date_input(
-            "买入日期（可选）",
-            value=date.today(),
+            "买入日期（用于入场日计划）",
+            value=default_buy_date,
+            max_value=date.today(),
             key="hold_page_buy_date",
+            help="系统会用该日及以前的日线，重算入场当天的 E/S/T1/T2/阻力/支撑",
         )
 
     c4, c5 = st.columns(2)
     with c4:
         use_plan = st.checkbox(
-            "加载最优短线计划（止蚀/T1/T2）",
+            "加载入场日 + 即时计划（止蚀/T1/T2/阻力）",
             value=True,
             key="hold_use_plan",
-            help="与投资SOP同源：区中下计划限价、止蚀ATR、目标至少1:1",
+            help="与投资SOP同源：区中下计划限价、止蚀ATR、目标至少1:1；入场日无未来K线",
         )
     with c5:
         horizon_pref = st.selectbox(
@@ -158,28 +373,23 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
             help="自动：比较两套计划的完整性、净R:R、胜率后选更好的一套做管仓",
         )
 
-    plan_stop = plan_t1 = plan_t2 = plan_entry = None
-    plan_zone_lo = plan_zone_hi = None
-    plan_rr = plan_rr_net = plan_wr = None
-    max_days = 10
-    bias_label, bias_score = "—", 0.0
-    horizon_label = "0–2周"
-    pick_why = ""
-    plan_verdict = "—"
-    sop = None
+    entry_lv: HoldLevels | None = None
+    live_lv: HoldLevels | None = None
     structure_bits: list[str] = []
+    load_err: str | None = None
 
     if st.button("生成持仓建议", type="primary", use_container_width=True, key="hold_page_go"):
         st.session_state["hold_page_ran"] = True
         st.session_state[f"hold_buy_{sym}"] = buy_px
         st.session_state[f"hold_sh_{sym}"] = shares
+        st.session_state[f"hold_dt_{sym}"] = buy_date
 
     if not st.session_state.get("hold_page_ran") and not st.session_state.get("hold_auto"):
         st.session_state["hold_auto"] = True
 
     if buy_px and (last or use_plan):
         if use_plan:
-            with st.spinner("加载最优计划中…"):
+            with st.spinner("加载入场日计划 + 即时计划…"):
                 try:
                     prefer_map = {
                         "自动选最优": "auto",
@@ -187,9 +397,9 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
                         "强制 2–4周": "h2",
                     }
                     prefer = prefer_map.get(horizon_pref, "auto")
-                    # primary_horizon only seeds default; we re-pick below
                     ph = "h2" if prefer == "h2" else "h1"
-                    sop = build_trade_sop(
+                    # —— 即时 ——
+                    sop_live = build_trade_sop(
                         sym,
                         period=period,
                         interval=interval,
@@ -197,225 +407,109 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
                         risk_pct=1.0,
                         primary_horizon=ph,
                     )
-                    primary, secondary, horizon_label, pick_why = pick_best_hold_plan(
-                        sop, prefer=prefer
-                    )
-                    exit_pl = getattr(sop, "exit_plan", None)
-                    if primary:
-                        plan_stop = primary.stop_loss
-                        plan_t1 = primary.target
-                        plan_entry = primary.entry_plan
-                        plan_zone_lo = primary.entry_low
-                        plan_zone_hi = primary.entry_high
-                        plan_rr = primary.rr
-                        plan_rr_net = primary.rr_net
-                        plan_wr = getattr(primary, "win_rate_display", None) or (
-                            f"{primary.win_rate_pct:.0f}%"
-                            if primary.win_rate_pct is not None
-                            else None
+                    live_lv = extract_hold_levels(sop_live, prefer=prefer, tag="live")
+                    if sop_live.last_price is not None:
+                        last = float(sop_live.last_price)
+                    name = sop_live.name or name
+                    structure_bits = list(live_lv.structure_bits or [])
+
+                    # —— 入场日（买入日期 as_of）——
+                    if buy_date:
+                        sop_entry = build_trade_sop(
+                            sym,
+                            period=period,
+                            interval=interval,
+                            capital=50_000 / 7.8,
+                            risk_pct=1.0,
+                            primary_horizon=ph,
+                            as_of=buy_date,
                         )
-                        plan_verdict = primary.verdict or "—"
-                        max_days = int(getattr(primary, "bars", None) or 10)
-                    if secondary and getattr(secondary, "target", None):
-                        plan_t2 = _f(secondary.target)
-                    # 强制：T1=较近目标，T2=较远目标（避免主周期选 2–4周 时 T1>T2）
-                    ta, tb = _f(plan_t1), _f(plan_t2)
-                    if ta is not None and tb is not None:
-                        plan_t1, plan_t2 = min(ta, tb), max(ta, tb)
-                    elif ta is not None:
-                        plan_t1, plan_t2 = ta, None
-                    elif tb is not None:
-                        plan_t1, plan_t2 = tb, None
-                    if exit_pl and getattr(exit_pl, "max_hold_days", None):
-                        max_days = int(exit_pl.max_hold_days)
-                    if sop.last_price is not None:
-                        last = float(sop.last_price)
-                    bias_label = sop.bias
-                    bias_score = float(sop.bias_score or 0)
-                    name = sop.name or name
-                    # 结构说明
-                    if getattr(sop, "notes", None):
-                        for n in sop.notes:
-                            if any(
-                                k in str(n)
-                                for k in ("计划限价", "止损", "目标", "E=", "ATR", "1:1")
-                            ):
-                                structure_bits.append(str(n))
-                                if len(structure_bits) >= 4:
-                                    break
+                        entry_lv = extract_hold_levels(
+                            sop_entry, prefer=prefer, tag="entry"
+                        )
                 except Exception as exc:
+                    load_err = str(exc)
                     st.warning(f"完整计划加载失败，改用买入价 vs 现价：{exc}")
 
         if last is None:
             st.error("没有现价，无法比较。请检查网络或股票代码。")
             return
 
-        # Fallback levels from fill if no plan
-        if plan_stop is None:
-            plan_stop = float(buy_px) * 0.97
-        if plan_t1 is None:
-            plan_t1 = float(buy_px) * 1.05
-
-        # ---- 价位总览卡（计划）----
-        st.markdown("---")
-        st.markdown("### 📋 最优计划价位（管仓用）")
-        if pick_why:
-            st.caption(pick_why)
-        st.caption(
-            f"周期 **{horizon_label}** · 计划结论参考 **{plan_verdict}** · "
-            f"多空 **{bias_label}**（{bias_score:+.0f}）· 最多约 **{max_days}** 交易日"
-        )
-
-        z1, z2, z3, z4, z5, z6 = st.columns(6)
-        z1.metric(
-            "计划限价 E",
-            f"{plan_entry:.2f}" if plan_entry else "—",
-            (
-                f"区 {plan_zone_lo:.2f}–{plan_zone_hi:.2f}"
-                if plan_zone_lo and plan_zone_hi
-                else None
-            ),
-        )
-        z2.metric("计划止蚀 S", f"{plan_stop:.2f}" if plan_stop else "—")
-        z3.metric("目标 T1", f"{plan_t1:.2f}" if plan_t1 else "—")
-        z4.metric("目标 T2", f"{plan_t2:.2f}" if plan_t2 else "—")
-        nr = getattr(sop, "nearest_resistance", None) if sop else None
-        ns = getattr(sop, "nearest_support", None) if sop else None
-        z5.metric(
-            "最近阻力",
-            f"{float(nr):.2f}" if nr is not None else "—",
-            (
-                f"+{sop.resistance_pct:.1f}%"
-                if sop and getattr(sop, "resistance_pct", None) is not None
-                else None
-            ),
-        )
-        z6.metric(
-            "最近支撑",
-            f"{float(ns):.2f}" if ns is not None else "—",
-            (
-                f"{sop.support_pct:+.1f}%"
-                if sop and getattr(sop, "support_pct", None) is not None
-                else None
-            ),
-        )
-        rr_show = plan_rr_net if plan_rr_net is not None else plan_rr
-        _cap = f"净R:R **{rr_show:.2f}**" if rr_show is not None else "净R:R —"
-        if plan_wr:
-            _cap += f" · 胜率 {plan_wr}"
-        if sop and getattr(sop, "resistance_levels_txt", ""):
-            _cap += f" · 上方阻力：{sop.resistance_levels_txt}"
-        st.caption(_cap)
-        # 价位尺加入阻力
-        if nr is not None:
-            st.caption(
-                f"对照：阻力 {float(nr):.2f}"
-                + (
-                    f" · 若 T1={float(plan_t1):.2f} 高于阻力，可先在阻力减仓"
-                    if plan_t1 and float(plan_t1) > float(nr)
-                    else ""
-                )
-            )
-
-        # 你的成交 vs 计划
-        st.markdown("#### 你的成交 vs 计划")
         buy_f = float(buy_px)
         last_f = float(last)
-        d1, d2, d3, d4 = st.columns(4)
-        d1.metric("你的买入", f"{buy_f:.2f}")
-        d2.metric("现价", f"{last_f:.2f}")
-        if plan_entry:
-            vs_e = (buy_f / float(plan_entry) - 1.0) * 100.0
-            d3.metric(
-                "买入 vs 计划E",
-                f"{vs_e:+.2f}%",
-                "贵了（相对计划）" if vs_e > 0.5 else ("更便宜" if vs_e < -0.5 else "接近计划"),
-            )
-        else:
-            d3.metric("买入 vs 计划E", "—")
-        if plan_stop and buy_f > float(plan_stop):
-            risk_pct = (buy_f - float(plan_stop)) / buy_f * 100.0
-            d4.metric("买入到止蚀", f"{risk_pct:.2f}%")
-        else:
-            d4.metric("买入到止蚀", "—")
 
-        # 价位图示（文字）
-        levels = []
-        if plan_stop:
-            levels.append(("止蚀 S", float(plan_stop)))
-        if ns is not None:
-            levels.append(("支撑", float(ns)))
-        levels.append(("你的买入", buy_f))
-        if plan_entry:
-            levels.append(("计划E", float(plan_entry)))
-        levels.append(("现价", last_f))
-        if nr is not None:
-            levels.append(("阻力", float(nr)))
-        if plan_t1:
-            levels.append(("T1", float(plan_t1)))
-        if plan_t2:
-            levels.append(("T2", float(plan_t2)))
-        levels_sorted = sorted(levels, key=lambda x: x[1])
-        st.caption(
-            "价位由低到高： "
-            + "  <  ".join(f"**{n}** {v:.2f}" for n, v in levels_sorted)
+        # Fallbacks if plans failed
+        if live_lv is None:
+            live_lv = HoldLevels(
+                tag="live",
+                as_of="即时",
+                close=last_f,
+                entry_plan=buy_f,
+                zone_lo=None,
+                zone_hi=None,
+                stop=buy_f * 0.97,
+                t1=buy_f * 1.05,
+                t2=buy_f * 1.10,
+                resistance=None,
+                support=None,
+                max_days=10,
+            )
+        if live_lv.stop is None:
+            live_lv.stop = buy_f * 0.97
+        if live_lv.t1 is None:
+            live_lv.t1 = buy_f * 1.05
+
+        t1_use = (
+            entry_lv.t1 if entry_lv and entry_lv.t1 is not None else live_lv.t1
+        )
+        t2_use = (
+            entry_lv.t2 if entry_lv and entry_lv.t2 is not None else live_lv.t2
+        )
+        stop_hard = (
+            entry_lv.stop if entry_lv and entry_lv.stop is not None else live_lv.stop
+        )
+        max_days = (
+            entry_lv.max_days if entry_lv is not None else live_lv.max_days
+        )
+        entry_as_of = (
+            buy_date.isoformat()
+            if buy_date
+            else (entry_lv.as_of if entry_lv else "")
         )
 
-        # HKD 空间（按股数或 5000 名义）
-        st.markdown("#### 若按现价平仓 / 打到计划位（约）")
-        notional = DEFAULT_NOTIONAL_HKD
-        if shares and int(shares) > 0:
-            sh = int(shares)
-            pnl_now = sh * (last_f - buy_f)
-            # rough HKD if US stock: user often thinks HKD; show USD and note
-            h1, h2, h3 = st.columns(3)
-            h1.metric("现价浮动(股币)", f"{pnl_now:+,.2f}")
-            if plan_t1:
-                h2.metric(
-                    "若到 T1(相对买入)",
-                    f"{sh * (float(plan_t1) - buy_f):+,.2f}",
-                )
-            if plan_stop:
-                h3.metric(
-                    "若打止蚀(相对买入)",
-                    f"{sh * (float(plan_stop) - buy_f):+,.2f}",
-                )
-            st.caption("上表按「股数 × 股价币种」；美股为美元。")
-        else:
-            # 5000 HKD notional equivalent move from buy
-            def _hkd_move(px: float) -> float:
-                return notional * (px / buy_f - 1.0)
-
-            h1, h2, h3 = st.columns(3)
-            h1.metric("现价浮动(按5k名义)", f"{_hkd_move(last_f):+,.0f} HKD")
-            if plan_t1:
-                h2.metric("到T1(按5k名义)", f"{_hkd_move(float(plan_t1)):+,.0f} HKD")
-            if plan_stop:
-                h3.metric("到止蚀(按5k名义)", f"{_hkd_move(float(plan_stop)):+,.0f} HKD")
-            st.caption(f"未填股数时，按名义 **{notional:.0f} HKD** 估算比例盈亏。")
-
-        if structure_bits:
-            with st.expander("计划结构说明（E/S/T 优化）", expanded=False):
-                for b in structure_bits:
-                    st.caption(f"· {b}")
-
-        # ---- 持仓动作建议 ----
-        advice = advise_open_position(
+        # 入场日 + 即时 → 综合 suggestion
+        advice, dual_lines = advise_dual_hold(
             buy_price=buy_f,
             last_price=last_f,
-            plan_stop=plan_stop,
-            plan_t1=plan_t1,
-            plan_t2=plan_t2,
-            plan_entry=plan_entry or buy_f,
-            max_hold_days=max_days,
             buy_date=buy_date.isoformat() if buy_date else None,
             shares=int(shares) if shares else None,
-            bias_label=bias_label,
-            bias_score=bias_score,
+            max_hold_days=max_days,
+            bias_label=live_lv.bias,
+            bias_score=live_lv.bias_score,
+            entry_stop=entry_lv.stop if entry_lv else None,
+            entry_t1=entry_lv.t1 if entry_lv else None,
+            entry_t2=entry_lv.t2 if entry_lv else None,
+            entry_e=entry_lv.entry_plan if entry_lv else None,
+            entry_res=entry_lv.resistance if entry_lv else None,
+            entry_sup=entry_lv.support if entry_lv else None,
+            entry_close=entry_lv.close if entry_lv else None,
+            entry_as_of=str(entry_as_of or ""),
+            live_stop=live_lv.stop,
+            live_t1=live_lv.t1,
+            live_t2=live_lv.t2,
+            live_e=live_lv.entry_plan,
+            live_res=live_lv.resistance,
+            live_sup=live_lv.support,
         )
 
+        # ========== 1) 持仓动作建议（置顶）==========
         st.markdown("---")
-        st.markdown("### 持仓动作建议")
+        st.markdown("### ⚡ 持仓动作建议（入场日 + 即时综合）")
+        st.caption(
+            "先看本段结论再执行；下方是入场日/即时明细与对照表。"
+            "硬止蚀以**入场日 S** 为底，目标进度以**入场日 T1/T2** 为准，"
+            "即时计划用于延伸目标与阻力节奏。"
+        )
         if advice.color == "red":
             st.error(f"## {advice.action}")
         elif advice.color == "amber":
@@ -440,8 +534,15 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
             f"{advice.pnl_r:+.2f}" if advice.pnl_r is not None else "—",
         )
 
-        st.markdown("#### 依据")
+        st.markdown("#### 入场日 vs 即时 · 分析")
+        for line in dual_lines:
+            st.markdown(f"- {line}")
+
+        st.markdown("#### 动作依据")
         for b in advice.bullets:
+            # 综合句已在 dual_lines 展示，避免重复
+            if isinstance(b, str) and b.startswith("【综合】"):
+                continue
             st.markdown(f"- {b}")
 
         st.markdown("#### 执行清单")
@@ -450,29 +551,169 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
             if advice.suggested_stop is not None
             else "—"
         )
-        _t1 = f"{plan_t1:.2f}" if plan_t1 is not None else "—"
-        _t2 = f"{plan_t2:.2f}" if plan_t2 is not None else "—"
-        _ps = f"{plan_stop:.2f}" if plan_stop is not None else "—"
+        _ps = _fmt(stop_hard)
+        _t1e = _fmt(entry_lv.t1 if entry_lv else None)
+        _t2e = _fmt(entry_lv.t2 if entry_lv else None)
+        _t1l = _fmt(live_lv.t1)
+        _t2l = _fmt(live_lv.t2)
+        _re = _fmt(entry_lv.resistance if entry_lv else None)
+        _rl = _fmt(live_lv.resistance)
         st.markdown(
-            f"1. **硬止蚀**：{_ps}（或建议止蚀 {_sug}）\n"
-            f"2. **T1 减仓**：{_t1} 到价减约一半，止蚀抬到保本\n"
-            f"3. **T2 / 时间**：{_t2} · 最多约 {max_days} 个交易日\n"
-            "4. 禁止：摊平、下移止蚀、无计划死扛"
+            f"1. **硬止蚀（入场日锁定）**：{_ps}；浮盈后用建议止蚀 **{_sug}** 上移锁利\n"
+            f"2. **阻力减仓**：入场日阻力 {_re} / 即时阻力 {_rl}，滞涨可先减\n"
+            f"3. **T1**：入场日 {_t1e}（主里程碑）· 即时 {_t1l}（延伸）；到价减约一半\n"
+            f"4. **T2 / 时间**：入场日 {_t2e} · 即时 {_t2l} · 最多约 {max_days} 个交易日\n"
+            "5. 禁止：摊平、下移止蚀、无计划死扛"
         )
+
+        # ========== 2) 双计划明细 ==========
+        st.markdown("---")
+        st.markdown("### 📋 双计划明细（入场日锁定 · 即时更新）")
+        st.caption(
+            "入场日 = 买入日及以前 K 线（无未来）；即时 = 最新行情。"
+            "结论已在上方「持仓动作建议」。"
+        )
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if entry_lv is not None and entry_lv.stop is not None:
+                _render_levels_card(
+                    entry_lv,
+                    title=f"🔒 入场日计划（{entry_as_of or entry_lv.as_of}）",
+                    subtitle="锁定结构 · 硬止蚀与原目标",
+                )
+                st.caption(
+                    "入场日价位尺："
+                    + _levels_ruler(entry_lv, buy=buy_f, last=None)
+                )
+            else:
+                st.markdown("#### 🔒 入场日计划")
+                if buy_date:
+                    st.info(
+                        f"未能重建 {buy_date.isoformat()} 的计划"
+                        + (f"：{load_err}" if load_err else "（数据不足或网络）")
+                        + "。请确认买入日期在有行情的交易日附近。"
+                    )
+                else:
+                    st.info("请填写买入日期以生成入场日计划。")
+
+        with col_b:
+            _render_levels_card(
+                live_lv,
+                title="📡 即时计划（最新）",
+                subtitle="更新目标 / 阻力 / trailing",
+            )
+            st.caption(
+                "即时价位尺：" + _levels_ruler(live_lv, buy=buy_f, last=last_f)
+            )
+
+        # ---- 对照表 ----
+        with st.expander("入场日 vs 即时对照表 · 成交对比 · 盈亏估算", expanded=False):
+            st.markdown("#### 入场日 vs 即时（一览）")
+            rows = [
+                ("计划限价 E", entry_lv.entry_plan if entry_lv else None, live_lv.entry_plan),
+                ("止蚀 S", entry_lv.stop if entry_lv else None, live_lv.stop),
+                ("目标 T1", entry_lv.t1 if entry_lv else None, live_lv.t1),
+                ("目标 T2", entry_lv.t2 if entry_lv else None, live_lv.t2),
+                ("最近阻力", entry_lv.resistance if entry_lv else None, live_lv.resistance),
+                ("最近支撑", entry_lv.support if entry_lv else None, live_lv.support),
+                ("区下沿", entry_lv.zone_lo if entry_lv else None, live_lv.zone_lo),
+                ("区上沿", entry_lv.zone_hi if entry_lv else None, live_lv.zone_hi),
+            ]
+            e_label = entry_as_of or "入场日"
+            table_md = (
+                f"| 项目 | 入场日（{e_label}） | 即时 | 相对你的买入 |\n"
+                "|------|------------------|------|-------------|\n"
+            )
+            for name_r, ev, lv in rows:
+                note = "—"
+                ref = ev if ev is not None else lv
+                if ref is not None and buy_f > 0:
+                    note = f"{(ref / buy_f - 1.0) * 100:+.1f}%"
+                table_md += f"| {name_r} | {_fmt(ev)} | {_fmt(lv)} | {note} |\n"
+            st.markdown(table_md)
+
+            st.markdown("#### 你的成交 vs 计划")
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("你的买入", f"{buy_f:.2f}")
+            d2.metric("现价", f"{last_f:.2f}")
+            e_ref = (
+                entry_lv.entry_plan
+                if entry_lv and entry_lv.entry_plan is not None
+                else live_lv.entry_plan
+            )
+            if e_ref is not None:
+                vs_e = (buy_f / float(e_ref) - 1.0) * 100.0
+                d3.metric(
+                    "买入 vs 入场E",
+                    f"{vs_e:+.2f}%",
+                    "贵了" if vs_e > 0.5 else ("更便宜" if vs_e < -0.5 else "接近"),
+                )
+            else:
+                d3.metric("买入 vs 入场E", "—")
+            if stop_hard is not None and buy_f > float(stop_hard):
+                risk_pct = (buy_f - float(stop_hard)) / buy_f * 100.0
+                d4.metric("买入到入场止蚀", f"{risk_pct:.2f}%")
+            else:
+                d4.metric("买入到止蚀", "—")
+
+            st.markdown("#### 若按现价平仓 / 打到计划位（约）")
+            notional = DEFAULT_NOTIONAL_HKD
+            if shares and int(shares) > 0:
+                sh = int(shares)
+                pnl_now = sh * (last_f - buy_f)
+                h1, h2, h3 = st.columns(3)
+                h1.metric("现价浮动(股币)", f"{pnl_now:+,.2f}")
+                if t1_use:
+                    h2.metric(
+                        "若到入场T1",
+                        f"{sh * (float(t1_use) - buy_f):+,.2f}",
+                    )
+                if stop_hard:
+                    h3.metric(
+                        "若打入场止蚀",
+                        f"{sh * (float(stop_hard) - buy_f):+,.2f}",
+                    )
+                st.caption("股数 × 股价币种（美股美元）。")
+            else:
+
+                def _hkd_move(px: float) -> float:
+                    return notional * (px / buy_f - 1.0)
+
+                h1, h2, h3 = st.columns(3)
+                h1.metric("现价浮动(5k名义)", f"{_hkd_move(last_f):+,.0f} HKD")
+                if t1_use:
+                    h2.metric("到入场T1", f"{_hkd_move(float(t1_use)):+,.0f} HKD")
+                if stop_hard:
+                    h3.metric("到入场止蚀", f"{_hkd_move(float(stop_hard)):+,.0f} HKD")
+                st.caption(f"未填股数时按名义 **{notional:.0f} HKD**。")
+
+        if structure_bits or (entry_lv and entry_lv.structure_bits):
+            with st.expander("计划结构说明（E/S/T）", expanded=False):
+                if entry_lv and entry_lv.structure_bits:
+                    st.markdown("**入场日**")
+                    for b in entry_lv.structure_bits:
+                        st.caption(f"· {b}")
+                if structure_bits:
+                    st.markdown("**即时**")
+                    for b in structure_bits:
+                        st.caption(f"· {b}")
 
         render_journal_panel(
             key_prefix="hold_jr",
             default_symbol=sym,
             default_name=str(name),
-            default_horizon=horizon_label,
+            default_horizon=(
+                entry_lv.horizon_label if entry_lv else live_lv.horizon_label
+            ),
             default_entry=buy_f,
-            default_stop=float(advice.suggested_stop or plan_stop or buy_f * 0.97),
-            default_target=float(plan_t1) if plan_t1 else None,
+            default_stop=float(advice.suggested_stop or stop_hard or buy_f * 0.97),
+            default_target=float(t1_use) if t1_use else None,
             default_shares=int(shares) if shares else 0,
             default_verdict=advice.action,
             default_exit_px=last_f,
-            expanded=True,
+            expanded=False,
         )
     else:
-        st.info("👆 填好买入价后，会自动加载最优计划价位与持仓建议。")
+        st.info("👆 填好买入价与买入日期后，会自动加载入场日 + 即时计划与持仓建议。")
         render_journal_panel(key_prefix="hold_jr_empty", expanded=False)

@@ -239,3 +239,310 @@ def advise_open_position(
         bullets=bullets,
         summary=summary,
     )
+
+
+def _level_status(last: float, level: float | None, *, kind: str) -> str:
+    """kind: target (above=hit) | stop (below=hit) | resistance | support."""
+    if level is None:
+        return "—"
+    if kind == "target":
+        if last >= level * 0.998:
+            return f"已到/超过 {level:.2f}"
+        return f"未到 {level:.2f}（还差 {(level / last - 1) * 100:+.1f}%）"
+    if kind == "stop":
+        if last <= level * 1.002:
+            return f"已触及 {level:.2f}"
+        return f"未破 {level:.2f}（上方还有 {(last / level - 1) * 100:+.1f}%）"
+    if kind == "resistance":
+        if last >= level * 0.998:
+            return f"已过/贴着 {level:.2f}"
+        return f"下方距 {level:.2f} 还有 {(level / last - 1) * 100:+.1f}%"
+    if kind == "support":
+        if last <= level * 1.002:
+            return f"已失 {level:.2f}"
+        return f"仍在 {level:.2f} 上方（{(last / level - 1) * 100:+.1f}%）"
+    return f"{level:.2f}"
+
+
+def analyze_entry_vs_live(
+    *,
+    buy_price: float,
+    last_price: float,
+    entry_stop: float | None = None,
+    entry_t1: float | None = None,
+    entry_t2: float | None = None,
+    entry_e: float | None = None,
+    entry_res: float | None = None,
+    entry_sup: float | None = None,
+    entry_close: float | None = None,
+    live_stop: float | None = None,
+    live_t1: float | None = None,
+    live_t2: float | None = None,
+    live_e: float | None = None,
+    live_res: float | None = None,
+    live_sup: float | None = None,
+    entry_as_of: str = "",
+    live_bias: str = "",
+    live_bias_score: float = 0.0,
+) -> list[str]:
+    """
+    Plain-language compare of entry-day plan vs live plan for hold coaching.
+    No look-ahead claims — just relative levels vs buy/last.
+    """
+    buy = _f(buy_price)
+    last = _f(last_price)
+    lines: list[str] = []
+    if buy is None or last is None:
+        return ["无法对比：买入价或现价无效"]
+
+    asof = f"（{entry_as_of}）" if entry_as_of else ""
+    lines.append(
+        f"【入场日{asof}】相对你的买入 {buy:.2f}："
+        + (
+            f"E={entry_e:.2f}"
+            if entry_e is not None
+            else "E=—"
+        )
+        + (
+            f" · 你比E{'便宜' if entry_e and buy < entry_e * 0.995 else ('偏贵' if entry_e and buy > entry_e * 1.005 else '接近')}"
+            if entry_e is not None
+            else ""
+        )
+        + (f" · 当日收≈{entry_close:.2f}" if entry_close is not None else "")
+    )
+    lines.append(
+        f"【入场日目标进度】S {_level_status(last, entry_stop, kind='stop')} · "
+        f"T1 {_level_status(last, entry_t1, kind='target')} · "
+        f"T2 {_level_status(last, entry_t2, kind='target')}"
+    )
+    if entry_res is not None:
+        lines.append(f"【入场日阻力】{_level_status(last, entry_res, kind='resistance')}")
+    if entry_sup is not None:
+        lines.append(f"【入场日支撑】{_level_status(last, entry_sup, kind='support')}")
+
+    lines.append(
+        f"【即时结构】S={live_stop:.2f}" if live_stop is not None else "【即时结构】S=—"
+    )
+    if live_stop is not None and entry_stop is not None:
+        if live_stop > entry_stop * 1.01:
+            lines.append(
+                f"即时止蚀 {live_stop:.2f} 高于入场日止蚀 {entry_stop:.2f}："
+                "结构随涨抬升；**硬纪律仍以入场日 S 为底**，建议止蚀可跟更高"
+            )
+        elif live_stop < entry_stop * 0.99:
+            lines.append(
+                f"即时止蚀 {live_stop:.2f} 低于入场日 {entry_stop:.2f}："
+                "勿把止蚀下移到即时更宽的位置"
+            )
+    t1_bits = []
+    if live_t1 is not None:
+        t1_bits.append(f"即时T1 {_level_status(last, live_t1, kind='target')}")
+    if live_t2 is not None:
+        t1_bits.append(f"即时T2 {_level_status(last, live_t2, kind='target')}")
+    if t1_bits:
+        lines.append("【即时目标】" + " · ".join(t1_bits))
+    if live_res is not None:
+        lines.append(f"【即时阻力】{_level_status(last, live_res, kind='resistance')}")
+    if live_sup is not None:
+        lines.append(f"【即时支撑】{_level_status(last, live_sup, kind='support')}")
+
+    # Synthesis
+    hit_e_t1 = entry_t1 is not None and last >= entry_t1 * 0.998
+    hit_e_t2 = entry_t2 is not None and last >= entry_t2 * 0.998
+    near_live_res = (
+        live_res is not None and abs(last - live_res) / max(last, 1e-9) < 0.015
+    )
+    past_e_res = entry_res is not None and last >= entry_res * 0.998
+
+    if hit_e_t2:
+        lines.append(
+            "【综合】现价已完成入场日 T2 一带 → 优先锁定利润，剩仓仅极小 + 紧止蚀"
+        )
+    elif hit_e_t1:
+        ext = ""
+        if live_t1 is not None and live_t1 > (entry_t1 or 0) * 1.01:
+            ext = f"；剩仓可看即时更高目标 T1≈{live_t1:.2f}"
+        elif entry_t2 is not None and last < entry_t2:
+            ext = f"；剩仓看入场日 T2≈{entry_t2:.2f}"
+        lines.append(
+            "【综合】现价已完成入场日 T1 → 建议已减仓或现在减半，止蚀抬到保本"
+            + ext
+        )
+    elif past_e_res and not hit_e_t1:
+        lines.append(
+            "【综合】已过入场日阻力、尚未到入场日 T1 → 可小减或持有，止蚀上移锁利，勿追高加仓"
+        )
+    elif near_live_res:
+        lines.append(
+            "【综合】现价贴近即时阻力 → 不宜新开/加仓；持仓者可分批减或收紧止蚀"
+        )
+    else:
+        lines.append(
+            "【综合】入场日目标未完成且未破止蚀 → 按入场日纪律持有，用即时阻力/支撑做节奏"
+        )
+
+    if live_bias:
+        lines.append(f"【即时多空】{live_bias}（{live_bias_score:+.0f}）")
+    return lines
+
+
+def advise_dual_hold(
+    *,
+    buy_price: float,
+    last_price: float,
+    buy_date: str | None = None,
+    shares: int | None = None,
+    max_hold_days: int | None = None,
+    bias_label: str = "",
+    bias_score: float = 0.0,
+    # entry-day
+    entry_stop: float | None = None,
+    entry_t1: float | None = None,
+    entry_t2: float | None = None,
+    entry_e: float | None = None,
+    entry_res: float | None = None,
+    entry_sup: float | None = None,
+    entry_close: float | None = None,
+    entry_as_of: str = "",
+    # live
+    live_stop: float | None = None,
+    live_t1: float | None = None,
+    live_t2: float | None = None,
+    live_e: float | None = None,
+    live_res: float | None = None,
+    live_sup: float | None = None,
+) -> tuple[PositionAdvice, list[str]]:
+    """
+    Hold coach using **entry-day** structure as primary contract,
+    **live** levels as extension / trailing context.
+
+    Returns (action advice, dual-analysis lines).
+    """
+    buy = _f(buy_price)
+    last = _f(last_price)
+    e_stop = _f(entry_stop)
+    e_t1 = _f(entry_t1)
+    e_t2 = _f(entry_t2)
+    l_t1 = _f(live_t1)
+    l_t2 = _f(live_t2)
+    l_stop = _f(live_stop)
+
+    # Hard stop: entry-day (never widen to a lower live stop)
+    hard_stop = e_stop
+    if hard_stop is None:
+        hard_stop = l_stop
+    elif l_stop is not None and l_stop > hard_stop:
+        # live higher stop can inform trailing later; hard floor stays entry
+        pass
+
+    # Primary milestone = entry T1; extension target = farther of entry T2 / live T1
+    coach_t1 = e_t1
+    coach_t2 = e_t2
+    if e_t2 is not None and l_t1 is not None:
+        coach_t2 = max(e_t2, l_t1)
+    elif l_t1 is not None and e_t2 is None:
+        coach_t2 = l_t1
+    if coach_t2 is not None and l_t2 is not None:
+        coach_t2 = max(coach_t2, l_t2)
+
+    dual_lines = analyze_entry_vs_live(
+        buy_price=buy_price,
+        last_price=last_price,
+        entry_stop=e_stop,
+        entry_t1=e_t1,
+        entry_t2=e_t2,
+        entry_e=_f(entry_e),
+        entry_res=_f(entry_res),
+        entry_sup=_f(entry_sup),
+        entry_close=_f(entry_close),
+        live_stop=l_stop,
+        live_t1=l_t1,
+        live_t2=l_t2,
+        live_e=_f(live_e),
+        live_res=_f(live_res),
+        live_sup=_f(live_sup),
+        entry_as_of=entry_as_of or "",
+        live_bias=bias_label,
+        live_bias_score=bias_score,
+    )
+
+    advice = advise_open_position(
+        buy_price=buy_price,
+        last_price=last_price,
+        plan_stop=hard_stop,
+        plan_t1=coach_t1,
+        plan_t2=coach_t2,
+        plan_entry=_f(entry_e) or _f(live_e) or buy,
+        max_hold_days=max_hold_days,
+        buy_date=buy_date,
+        shares=shares,
+        bias_label=bias_label,
+        bias_score=bias_score,
+    )
+
+    # Enrich: resistance-aware scale-out nudge (doesn't override hard stop exit)
+    extra: list[str] = []
+    if buy is not None and last is not None and advice.action not in ("止蚀离场",):
+        e_res = _f(entry_res)
+        l_res = _f(live_res)
+        if (
+            e_t1 is not None
+            and last >= e_t1 * 0.998
+            and l_t1 is not None
+            and l_t1 > e_t1 * 1.02
+        ):
+            extra.append(
+                f"入场日 T1 已完成；即时给出更高 T1≈{l_t1:.2f} → 减仓后剩仓可看此延伸目标"
+            )
+        if l_res is not None and abs(last - l_res) / last < 0.012:
+            if advice.action == "持有":
+                advice = PositionAdvice(
+                    action="持有·注意阻力",
+                    color="amber",
+                    headline=(
+                        f"贴近即时阻力 {l_res:.2f}：可小减或收紧止蚀，"
+                        f"勿在阻力位加仓"
+                    ),
+                    pnl_pct=advice.pnl_pct,
+                    pnl_r=advice.pnl_r,
+                    dist_to_stop_pct=advice.dist_to_stop_pct,
+                    dist_to_t1_pct=advice.dist_to_t1_pct,
+                    dist_to_t2_pct=advice.dist_to_t2_pct,
+                    suggested_stop=advice.suggested_stop,
+                    bullets=list(advice.bullets),
+                    summary=f"**持有·注意阻力** · 贴近即时阻力 {l_res:.2f}",
+                )
+            extra.append(f"即时阻力 {l_res:.2f} 近在眼前，分批优先于一把清/一把加")
+        if e_res is not None and last >= e_res * 0.998 and (
+            e_t1 is None or last < e_t1 * 0.995
+        ):
+            extra.append(
+                f"已过入场日阻力 {e_res:.2f}、未到 T1 → 浮盈宜上移止蚀，不追价加仓"
+            )
+
+        # If live stop is higher and we're in profit, bump suggested trail toward live structure
+        if (
+            advice.suggested_stop is not None
+            and l_stop is not None
+            and e_stop is not None
+            and last > buy
+            and l_stop > advice.suggested_stop
+            and l_stop < last * 0.995
+            and advice.action in ("持有", "持有·上移止蚀", "持有·注意阻力")
+        ):
+            # don't jump above lock-in trail from coach; take max of suggested and a fraction toward live
+            bumped = min(l_stop, buy + 0.5 * (last - buy))
+            if bumped > advice.suggested_stop:
+                advice.suggested_stop = round(bumped, 4)
+                extra.append(f"结合即时结构，建议止蚀可抬到 ≈ {advice.suggested_stop:.2f}")
+
+    if extra:
+        advice.bullets = list(advice.bullets) + extra
+        advice.summary = f"**{advice.action}** · {advice.headline}"
+
+    # Prepend dual summary line into bullets for single-block UI
+    top = [ln for ln in dual_lines if ln.startswith("【综合】")]
+    rest_dual = [ln for ln in dual_lines if not ln.startswith("【综合】")]
+    advice.bullets = top + list(advice.bullets)
+
+    return advice, rest_dual + top

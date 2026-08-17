@@ -14,7 +14,7 @@ from edge_signals import (
     map_sector_etf,
 )
 from exit_plan import apply_long_slippage, build_exit_plan
-from position_coach import advise_open_position
+from position_coach import advise_dual_hold, advise_open_position, analyze_entry_vs_live
 from mtf_signals import analyze_adx, analyze_fib_levels, merge_entry_with_fib
 from indicators import enrich
 from trade_journal import add_trade, close_trade, journal_stats, load_trades, save_trades
@@ -39,10 +39,12 @@ from trade_sop import (
     order_targets_near_far,
     format_win_rate,
     get_mode_thresholds,
+    parse_as_of_date,
     path_wr_confidence,
     plan_limit_from_zone,
     resolve_path_win_rate,
     resolve_trading_mode,
+    slice_ohlcv_as_of,
 )
 
 
@@ -711,6 +713,39 @@ class TestTradeSOPHelpers(unittest.TestCase):
         )
         self.assertIn("持有", a.action)
 
+    def test_dual_hold_uses_entry_t1_and_analysis(self):
+        # Past entry T1 but below live higher T1 → scale out on entry contract
+        a, lines = advise_dual_hold(
+            buy_price=913.0,
+            last_price=1011.0,
+            buy_date="2026-08-13",
+            shares=4,
+            entry_stop=823.0,
+            entry_t1=1008.0,
+            entry_t2=1027.0,
+            entry_e=916.0,
+            entry_res=1012.0,
+            entry_as_of="2026-08-13",
+            live_stop=882.0,
+            live_t1=1077.0,
+            live_t2=1096.0,
+            live_res=1012.0,
+            bias_label="强烈看多",
+            bias_score=63.0,
+        )
+        self.assertEqual(a.action, "止盈减仓")
+        self.assertTrue(any("入场日" in x or "T1" in x for x in lines))
+        self.assertTrue(any("综合" in x for x in lines))
+        # analysis helper alone
+        al = analyze_entry_vs_live(
+            buy_price=913.0,
+            last_price=1011.0,
+            entry_t1=1008.0,
+            entry_stop=823.0,
+            live_t1=1077.0,
+        )
+        self.assertTrue(any("综合" in x for x in al))
+
     def test_journal_roundtrip(self):
         import os
         import tempfile
@@ -785,6 +820,46 @@ class TestTradeSOPHelpers(unittest.TestCase):
         out = multi_horizon_rs(stock, bench)
         self.assertIsNotNone(out.get("score"))
         self.assertIn(out.get("label"), ("强于大盘", "同步", "弱于大盘", "—"))
+
+    def test_parse_as_of_date(self):
+        from datetime import date, datetime
+
+        self.assertEqual(parse_as_of_date("2026-08-13"), date(2026, 8, 13))
+        self.assertEqual(parse_as_of_date(date(2026, 8, 13)), date(2026, 8, 13))
+        self.assertEqual(
+            parse_as_of_date(datetime(2026, 8, 13, 15, 30)), date(2026, 8, 13)
+        )
+        self.assertIsNone(parse_as_of_date(None))
+        self.assertIsNone(parse_as_of_date("not-a-date"))
+
+    def test_slice_ohlcv_as_of_no_lookahead(self):
+        from datetime import date
+
+        # Match stock_service shape: Date column + RangeIndex
+        dates = pd.date_range("2026-08-01", periods=10, freq="B")
+        df = pd.DataFrame(
+            {
+                "Date": dates,
+                "Open": np.arange(10.0),
+                "High": np.arange(10.0) + 1,
+                "Low": np.arange(10.0) - 1,
+                "Close": np.arange(100.0, 110.0),
+                "Volume": np.full(10, 1e6),
+            }
+        )
+        cut = slice_ohlcv_as_of(df, date(2026, 8, 13))
+        self.assertFalse(cut.empty)
+        last_d = pd.Timestamp(cut["Date"].iloc[-1]).date()
+        self.assertLessEqual(last_d, date(2026, 8, 13))
+        self.assertTrue(
+            all(pd.Timestamp(x).date() <= date(2026, 8, 13) for x in cut["Date"])
+        )
+        self.assertGreater(len(df), len(cut))
+        # also DatetimeIndex form
+        df2 = df.set_index("Date")
+        cut2 = slice_ohlcv_as_of(df2, date(2026, 8, 13))
+        self.assertFalse(cut2.empty)
+        self.assertLessEqual(len(cut2), len(df2))
 
 
 if __name__ == "__main__":
