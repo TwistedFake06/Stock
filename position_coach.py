@@ -386,6 +386,257 @@ def analyze_entry_vs_live(
     return lines
 
 
+@dataclass
+class FollowLevels:
+    """
+    Single set of numbers the user should act on — no dual ambiguity.
+
+    Split carefully:
+    - now_do = what to do *immediately* (may already be triggered; not a future price)
+    - wait_price = price still ahead if you are waiting; None if action is now
+    - remain_target = next target for shares you still hold *after* now_do
+    - far_target = level beyond remain_target (must differ from remain_target)
+    """
+
+    stage: str  # before_t1 | past_t1 | past_t2 | at_stop
+    rule_one_liner: str
+    hard_stop: float | None
+    now_stop: float | None
+    # Immediate action (not the same field as remain target)
+    now_do: str
+    now_do_detail: str
+    # Future ladder for remaining position
+    wait_price: float | None  # only if still waiting to act
+    wait_label: str  # e.g. 等T1减半 | 剩仓看T2
+    remain_target: float | None
+    remain_label: str
+    far_target: float | None
+    far_label: str
+    resistance: float | None
+    next_why: str
+    follow_note: str
+    # Back-compat aliases used by older UI/tests
+    next_price: float | None = None
+    next_action: str = ""
+    extend_target: float | None = None
+
+
+def _levels_above(last: float | None, *levels: float | None) -> list[float]:
+    if last is None:
+        return []
+    out: list[float] = []
+    for x in levels:
+        v = _f(x)
+        if v is not None and v > last * 1.002:
+            out.append(v)
+    out.sort()
+    return out
+
+
+def build_follow_levels(
+    *,
+    buy_price: float,
+    last_price: float,
+    advice: PositionAdvice,
+    entry_stop: float | None = None,
+    entry_t1: float | None = None,
+    entry_t2: float | None = None,
+    entry_res: float | None = None,
+    live_t1: float | None = None,
+    live_t2: float | None = None,
+    live_res: float | None = None,
+) -> FollowLevels:
+    """
+    Collapse entry+live into one ladder.
+
+    Critical UX: when T1 is already hit,「减半」is *now*, not at T2 price.
+    T2/live targets are only for the *remaining* size after scale-out.
+    """
+    last = _f(last_price)
+    e_s = _f(entry_stop)
+    e_t1 = _f(entry_t1)
+    e_t2 = _f(entry_t2)
+    e_r = _f(entry_res)
+    l_t1 = _f(live_t1)
+    l_t2 = _f(live_t2)
+    l_r = _f(live_res)
+    now_stop = _f(advice.suggested_stop) or e_s
+
+    rule = (
+        "只跟这一套："
+        "①现在立刻做的动作 ②现在止蚀 ③剩仓下一目标。"
+        "T1 已到就立刻减半，不要等到 T2 才减。"
+    )
+
+    hit_t1 = e_t1 is not None and last is not None and last >= e_t1 * 0.998
+    hit_t2 = e_t2 is not None and last is not None and last >= e_t2 * 0.998
+    at_stop = (
+        e_s is not None and last is not None and last <= e_s * 1.002
+    ) or advice.action == "止蚀离场"
+
+    # Upside ladder above last (for remaining / waiting)
+    above = _levels_above(last, e_t1, e_t2, l_t1, l_t2)
+    # Prefer entry T2 as first remain target when past T1
+    remain: float | None = None
+    far: float | None = None
+
+    res_watch = None
+    for r in (l_r, e_r):
+        if r is not None and last is not None and r >= last * 0.995:
+            if res_watch is None or r < res_watch:
+                res_watch = r
+
+    if at_stop:
+        stage = "at_stop"
+        now_do = "立刻离场"
+        now_do_detail = f"已触/破硬止蚀 {_fmt_px(e_s)}，不要等反弹"
+        wait_price, wait_label = None, "—"
+        remain, remain_label = None, "—"
+        far, far_label = None, "—"
+        why = "破止蚀优先于任何目标"
+
+    elif hit_t2 or advice.action == "止盈清仓":
+        stage = "past_t2"
+        now_do = "清仓或留极小仓"
+        now_do_detail = (
+            f"入场日 T2≈{_fmt_px(e_t2)} 已完成（或建议清仓）→ 现在锁定利润"
+        )
+        wait_price, wait_label = None, "—"
+        remain, remain_label = None, "—"
+        # only show far if live still has higher
+        ups = _levels_above(last, l_t1, l_t2)
+        far = ups[0] if ups else None
+        far_label = "若留极小仓可看" if far else "—"
+        why = "主目标已完成，剩仓仅用紧止蚀"
+
+    elif hit_t1 or advice.action == "止盈减仓":
+        # ★ 减半 = 现在做；1026 等是剩仓目标，绝不能写成「到1026才减半」
+        stage = "past_t1"
+        now_do = "现在减半（T1已到）"
+        now_do_detail = (
+            f"入场日 T1≈{_fmt_px(e_t1)} 已到/超过 → "
+            f"**现在**减约一半，止蚀改到保本 {_fmt_px(now_stop)}；"
+            f"不要等更高价才减"
+        )
+        wait_price, wait_label = None, "已触发·勿再等"
+        # remain = nearest above last among entry T2 / live targets
+        prefer: list[float] = []
+        if e_t2 is not None and last is not None and e_t2 > last * 1.002:
+            prefer.append(e_t2)
+        prefer.extend(_levels_above(last, l_t1, l_t2))
+        # unique sorted
+        seen: set[float] = set()
+        ladder: list[float] = []
+        for p in prefer:
+            key = round(p, 2)
+            if key not in seen:
+                seen.add(key)
+                ladder.append(p)
+        ladder.sort()
+        remain = ladder[0] if ladder else None
+        far = ladder[1] if len(ladder) > 1 else None
+        if remain is not None and e_t2 is not None and abs(remain - e_t2) < 0.02:
+            remain_label = "剩仓下一目标(入场T2)"
+        elif remain is not None:
+            remain_label = "剩仓下一目标"
+        else:
+            remain_label = "无更高目标·收紧止蚀"
+        far_label = "更远目标" if far is not None else "—"
+        why = (
+            f"步骤拆开：①先减半（现在）②止蚀→{_fmt_px(now_stop)} "
+            f"③剩仓拿到 {_fmt_px(remain) if remain else '—'}"
+            + (f" ④更远 {_fmt_px(far)}" if far else "")
+        )
+
+    else:
+        stage = "before_t1"
+        now_do = "持有·守止蚀"
+        now_do_detail = "入场日 T1 未到：先拿着，止蚀不降"
+        # Wait for nearer of resistance (soft) or T1 (main)
+        wait_cands: list[tuple[float, str]] = []
+        if e_t1 is not None and last is not None and e_t1 > last:
+            wait_cands.append((e_t1, "到T1再减半"))
+        for r in (l_r, e_r):
+            if (
+                r is not None
+                and last is not None
+                and e_t1 is not None
+                and last < r < e_t1
+            ):
+                wait_cands.append((r, "近阻力可小减"))
+                break
+        wait_cands.sort(key=lambda x: x[0])
+        if wait_cands:
+            wait_price, wait_label = wait_cands[0][0], wait_cands[0][1]
+        else:
+            wait_price, wait_label = e_t1, "到T1再减半"
+        # remain after that event = T2 or live
+        remain = None
+        if e_t2 is not None and (wait_price is None or e_t2 > (wait_price or 0)):
+            remain = e_t2
+        remain_label = "T1之后的T2" if remain else "—"
+        far_ups = _levels_above(remain or last, l_t1, l_t2)
+        far = far_ups[0] if far_ups else None
+        far_label = "更远" if far else "—"
+        why = (
+            f"未到 T1：等到 {_fmt_px(wait_price)}（{wait_label}）；"
+            f"T2={_fmt_px(remain)}"
+        )
+        now_do = "持有"
+        if wait_label.startswith("近阻力"):
+            now_do_detail = (
+                f"可先盯阻力 {_fmt_px(wait_price)} 小减；"
+                f"主减仓仍是 T1≈{_fmt_px(e_t1)}"
+            )
+
+    note = (
+        "「现在减半」和「剩仓目标」是两步："
+        "T1 已到 → 立刻减；剩下的仓位才看 T2/更高价。"
+        "不会出现「到 T2 才减半」这种混在一起的提示。"
+    )
+
+    # Back-compat for UI that still reads next_price / next_action / extend_target
+    if stage == "past_t1":
+        next_price = remain  # future only
+        next_action = now_do
+        extend_target = far if far is not None else remain
+    elif stage == "before_t1":
+        next_price = wait_price
+        next_action = wait_label
+        extend_target = remain
+    else:
+        next_price = wait_price or last
+        next_action = now_do
+        extend_target = far
+
+    return FollowLevels(
+        stage=stage,
+        rule_one_liner=rule,
+        hard_stop=e_s,
+        now_stop=now_stop,
+        now_do=now_do,
+        now_do_detail=now_do_detail,
+        wait_price=wait_price,
+        wait_label=wait_label,
+        remain_target=remain,
+        remain_label=remain_label,
+        far_target=far,
+        far_label=far_label,
+        resistance=res_watch,
+        next_why=why,
+        follow_note=note,
+        next_price=next_price,
+        next_action=next_action,
+        extend_target=extend_target,
+    )
+
+
+def _fmt_px(v: float | None) -> str:
+    if v is None:
+        return "—"
+    return f"{v:.2f}"
+
+
 def advise_dual_hold(
     *,
     buy_price: float,

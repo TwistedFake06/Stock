@@ -330,7 +330,7 @@ STOP_ATR_FLOOR = 0.6  # 止损距离下限（ATR 倍数）
 
 # 部署指纹：Streamlit Cloud 侧栏应显示同一字串；否则仍是旧代码
 # v1 定版：三灯 + E/S/T + 极简 UI + 财报窗口盖帽 + 持仓入场日/即时双计划
-SOP_BUILD = "v1-stable-2026-08-hold-dual2"
+SOP_BUILD = "v1-stable-2026-08-hold-one"
 
 MODE_THRESHOLDS: dict[str, ModeThresholds] = {
     "defensive": ModeThresholds(

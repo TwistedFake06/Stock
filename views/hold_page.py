@@ -7,7 +7,7 @@ from typing import Any
 
 import streamlit as st
 
-from position_coach import advise_dual_hold
+from position_coach import advise_dual_hold, build_follow_levels
 from stock_service import cache_bucket, cached_info, fetch_history, normalize_symbol
 from trade_sop import DEFAULT_NOTIONAL_HKD, build_trade_sop
 from views.journal_panel import render_journal_panel
@@ -296,10 +296,8 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
     """Always-visible buy-price coach (does not depend on long tabs)."""
     st.markdown("# 💰 我已买入")
     st.markdown(
-        f"股票 **`{symbol}`** · 填**买入价 + 买入日期** → 系统同时给出：\n"
-        "1. **入场日计划**（按买入当天及以前 K 线算的 E / 止蚀 / T1 / T2 / 阻力 / 支撑）\n"
-        "2. **即时计划**（按最新行情重算）\n"
-        "再对照现价建议 **持有 / 止盈 / 止蚀**。"
+        f"股票 **`{symbol}`** · 填**买入价 + 买入日期** → "
+        "系统给出 **唯一一套「你现在跟这些」**（不用自己选入场日或即时）。"
     )
 
     sym = normalize_symbol(symbol)
@@ -477,7 +475,7 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
             else (entry_lv.as_of if entry_lv else "")
         )
 
-        # 入场日 + 即时 → 综合 suggestion
+        # 入场日 + 即时 → 综合 suggestion + 唯一跟单价位
         advice, dual_lines = advise_dual_hold(
             buy_price=buy_f,
             last_price=last_f,
@@ -501,114 +499,186 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
             live_res=live_lv.resistance,
             live_sup=live_lv.support,
         )
-
-        # ========== 1) 持仓动作建议（置顶）==========
-        st.markdown("---")
-        st.markdown("### ⚡ 持仓动作建议（入场日 + 即时综合）")
-        st.caption(
-            "先看本段结论再执行；下方是入场日/即时明细与对照表。"
-            "硬止蚀以**入场日 S** 为底，目标进度以**入场日 T1/T2** 为准，"
-            "即时计划用于延伸目标与阻力节奏。"
+        follow = build_follow_levels(
+            buy_price=buy_f,
+            last_price=last_f,
+            advice=advice,
+            entry_stop=entry_lv.stop if entry_lv else None,
+            entry_t1=entry_lv.t1 if entry_lv else None,
+            entry_t2=entry_lv.t2 if entry_lv else None,
+            entry_res=entry_lv.resistance if entry_lv else None,
+            live_t1=live_lv.t1,
+            live_t2=live_lv.t2,
+            live_res=live_lv.resistance,
         )
+
+        # ========== 唯一决策区（置顶，不逼你选入场日/即时）==========
+        st.markdown("---")
+        st.markdown("### ⚡ 你现在怎么做（只跟这一套）")
+        st.info(follow.rule_one_liner)
+
         if advice.color == "red":
             st.error(f"## {advice.action}")
         elif advice.color == "amber":
             st.warning(f"## {advice.action}")
         else:
             st.success(f"## {advice.action}")
-        st.markdown(f"### {advice.headline}")
+        st.markdown(f"**{advice.headline}**")
 
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("买入价", f"{buy_f:.2f}")
-        m2.metric("现价", f"{last_f:.2f}")
-        m3.metric(
+        # 价位尺：现在立刻做 ≠ 剩仓目标（避免「1026=减半」的混淆）
+        st.markdown(f"**现在立刻做：** {follow.now_do}")
+        st.caption(follow.now_do_detail)
+
+        k1, k2, k3, k4, k5 = st.columns(5)
+        k1.metric("现价", f"{last_f:.2f}")
+        k2.metric(
             "浮盈%",
             f"{advice.pnl_pct:+.2f}%" if advice.pnl_pct is not None else "—",
         )
-        m4.metric(
-            "建议止蚀",
-            f"{advice.suggested_stop:.2f}" if advice.suggested_stop else "—",
+        k3.metric(
+            "现在止蚀（跟这个）",
+            _fmt(follow.now_stop),
+            (
+                f"硬底线 {_fmt(follow.hard_stop)}"
+                if follow.hard_stop is not None
+                else None
+            ),
         )
-        m5.metric(
-            "浮盈R",
-            f"{advice.pnl_r:+.2f}" if advice.pnl_r is not None else "—",
-        )
+        # 未到 T1：显示「等待价」；已到 T1：显示「剩仓下一目标」（不再把减半绑在 T2 价上）
+        if follow.stage == "before_t1":
+            k4.metric(
+                "等待价（到了再减）",
+                _fmt(follow.wait_price),
+                follow.wait_label or None,
+            )
+            k5.metric(
+                "之后目标(T2)",
+                _fmt(follow.remain_target),
+                follow.remain_label or None,
+            )
+        elif follow.stage == "past_t1":
+            k4.metric(
+                "剩仓下一目标",
+                _fmt(follow.remain_target),
+                follow.remain_label or "减半之后才看",
+            )
+            k5.metric(
+                "更远目标",
+                _fmt(follow.far_target) if follow.far_target is not None else "—",
+                (
+                    follow.far_label
+                    if follow.far_target is not None
+                    else (
+                        f"阻力 {_fmt(follow.resistance)}"
+                        if follow.resistance is not None
+                        else "无更远·收紧止蚀"
+                    )
+                ),
+            )
+        else:
+            k4.metric("等待/目标", "—", follow.wait_label or follow.now_do)
+            k5.metric(
+                "备注",
+                _fmt(follow.far_target) if follow.far_target else "—",
+                (
+                    f"阻力 {_fmt(follow.resistance)}"
+                    if follow.resistance is not None
+                    else None
+                ),
+            )
 
-        st.markdown("#### 入场日 vs 即时 · 分析")
+        if follow.resistance is not None and follow.stage == "past_t1":
+            st.caption(
+                f"参考阻力 ≈ **{_fmt(follow.resistance)}**（可贴着减/观察，"
+                f"但**减半动作不依赖阻力**，T1 已到就该减）"
+            )
+
+        st.markdown(f"**为什么：** {follow.next_why}")
+
+        st.markdown("#### 3 步执行（步骤已拆开）")
+        if follow.stage == "past_t1":
+            st.markdown(
+                f"1. **现在**减约一半（入场日 T1 已到，**不必等到** "
+                f"{_fmt(follow.remain_target)}）\n"
+                f"2. 券商止蚀改到 **{_fmt(follow.now_stop)}**"
+                f"（硬底线 {_fmt(follow.hard_stop)}，只上移不下移）\n"
+                f"3. **剩仓**拿到 **{_fmt(follow.remain_target)}** 再减/清"
+                + (
+                    f"；更远可看 {_fmt(follow.far_target)}"
+                    if follow.far_target is not None
+                    else ""
+                )
+                + "\n4. 禁止：摊平、止蚀下移、把「减半」拖到 T2 才做"
+            )
+        elif follow.stage == "before_t1":
+            st.markdown(
+                f"1. 券商止蚀设在 **{_fmt(follow.now_stop)}**"
+                f"（硬底线 {_fmt(follow.hard_stop)}）\n"
+                f"2. 等到 **{_fmt(follow.wait_price)}** → {follow.wait_label}\n"
+                f"3. 再远目标 **{_fmt(follow.remain_target)}**；禁止摊平/下移止蚀"
+            )
+        else:
+            st.markdown(
+                f"1. **{follow.now_do}**\n"
+                f"2. 止蚀参考 **{_fmt(follow.now_stop)}**\n"
+                f"3. 禁止摊平、下移止蚀"
+            )
+        st.caption(follow.follow_note)
+
+        # 短依据（最多 4 条，含综合）
+        short_bits: list[str] = []
         for line in dual_lines:
-            st.markdown(f"- {line}")
-
-        st.markdown("#### 动作依据")
+            if line.startswith("【综合】"):
+                short_bits.append(line.replace("【综合】", "").strip())
         for b in advice.bullets:
-            # 综合句已在 dual_lines 展示，避免重复
-            if isinstance(b, str) and b.startswith("【综合】"):
+            if not isinstance(b, str):
                 continue
-            st.markdown(f"- {b}")
+            if b.startswith("【综合】"):
+                continue
+            if any(
+                k in b
+                for k in ("买入 ", "浮盈", "建议", "止蚀", "约 ")
+            ):
+                short_bits.append(b)
+            if len(short_bits) >= 4:
+                break
+        if short_bits:
+            with st.expander("简要依据（可收起）", expanded=False):
+                for b in short_bits[:5]:
+                    st.markdown(f"- {b}")
 
-        st.markdown("#### 执行清单")
-        _sug = (
-            f"{advice.suggested_stop:.2f}"
-            if advice.suggested_stop is not None
-            else "—"
-        )
-        _ps = _fmt(stop_hard)
-        _t1e = _fmt(entry_lv.t1 if entry_lv else None)
-        _t2e = _fmt(entry_lv.t2 if entry_lv else None)
-        _t1l = _fmt(live_lv.t1)
-        _t2l = _fmt(live_lv.t2)
-        _re = _fmt(entry_lv.resistance if entry_lv else None)
-        _rl = _fmt(live_lv.resistance)
-        st.markdown(
-            f"1. **硬止蚀（入场日锁定）**：{_ps}；浮盈后用建议止蚀 **{_sug}** 上移锁利\n"
-            f"2. **阻力减仓**：入场日阻力 {_re} / 即时阻力 {_rl}，滞涨可先减\n"
-            f"3. **T1**：入场日 {_t1e}（主里程碑）· 即时 {_t1l}（延伸）；到价减约一半\n"
-            f"4. **T2 / 时间**：入场日 {_t2e} · 即时 {_t2l} · 最多约 {max_days} 个交易日\n"
-            "5. 禁止：摊平、下移止蚀、无计划死扛"
-        )
-
-        # ========== 2) 双计划明细 ==========
-        st.markdown("---")
-        st.markdown("### 📋 双计划明细（入场日锁定 · 即时更新）")
-        st.caption(
-            "入场日 = 买入日及以前 K 线（无未来）；即时 = 最新行情。"
-            "结论已在上方「持仓动作建议」。"
-        )
-
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if entry_lv is not None and entry_lv.stop is not None:
-                _render_levels_card(
-                    entry_lv,
-                    title=f"🔒 入场日计划（{entry_as_of or entry_lv.as_of}）",
-                    subtitle="锁定结构 · 硬止蚀与原目标",
-                )
-                st.caption(
-                    "入场日价位尺："
-                    + _levels_ruler(entry_lv, buy=buy_f, last=None)
-                )
-            else:
-                st.markdown("#### 🔒 入场日计划")
+        # ========== 进阶：双计划明细（默认折叠，防信息过载）==========
+        with st.expander("进阶：入场日 / 即时明细（一般不用看）", expanded=False):
+            st.caption(
+                "入场日 = 合同（硬止蚀 + 原 T1/T2）；"
+                "即时 = 天气预报（抬止蚀 / 延伸目标）。"
+                "日常只跟上方「现在止蚀 + 下一动作价」。"
+            )
+            if entry_lv is None or entry_lv.stop is None:
                 if buy_date:
                     st.info(
-                        f"未能重建 {buy_date.isoformat()} 的计划"
-                        + (f"：{load_err}" if load_err else "（数据不足或网络）")
-                        + "。请确认买入日期在有行情的交易日附近。"
+                        f"未能重建 {buy_date.isoformat()} 的入场日计划"
+                        + (f"：{load_err}" if load_err else "")
                     )
-                else:
-                    st.info("请填写买入日期以生成入场日计划。")
-
-        with col_b:
-            _render_levels_card(
-                live_lv,
-                title="📡 即时计划（最新）",
-                subtitle="更新目标 / 阻力 / trailing",
-            )
-            st.caption(
-                "即时价位尺：" + _levels_ruler(live_lv, buy=buy_f, last=last_f)
-            )
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if entry_lv is not None and entry_lv.stop is not None:
+                    _render_levels_card(
+                        entry_lv,
+                        title=f"🔒 入场日（{entry_as_of or entry_lv.as_of}）",
+                        subtitle="合同：硬止蚀与原目标",
+                    )
+            with col_b:
+                _render_levels_card(
+                    live_lv,
+                    title="📡 即时",
+                    subtitle="天气：延伸 / 阻力",
+                )
+            for line in dual_lines:
+                st.caption(line)
 
         # ---- 对照表 ----
-        with st.expander("入场日 vs 即时对照表 · 成交对比 · 盈亏估算", expanded=False):
+        with st.expander("对照表 · 盈亏估算 · 日志前参考", expanded=False):
             st.markdown("#### 入场日 vs 即时（一览）")
             rows = [
                 ("计划限价 E", entry_lv.entry_plan if entry_lv else None, live_lv.entry_plan),

@@ -14,7 +14,12 @@ from edge_signals import (
     map_sector_etf,
 )
 from exit_plan import apply_long_slippage, build_exit_plan
-from position_coach import advise_dual_hold, advise_open_position, analyze_entry_vs_live
+from position_coach import (
+    advise_dual_hold,
+    advise_open_position,
+    analyze_entry_vs_live,
+    build_follow_levels,
+)
 from mtf_signals import analyze_adx, analyze_fib_levels, merge_entry_with_fib
 from indicators import enrich
 from trade_journal import add_trade, close_trade, journal_stats, load_trades, save_trades
@@ -745,6 +750,23 @@ class TestTradeSOPHelpers(unittest.TestCase):
             live_t1=1077.0,
         )
         self.assertTrue(any("综合" in x for x in al))
+        fl = build_follow_levels(
+            buy_price=913.0,
+            last_price=1011.0,
+            advice=a,
+            entry_stop=823.0,
+            entry_t1=1008.0,
+            entry_t2=1027.0,
+            live_t1=1077.0,
+        )
+        self.assertEqual(fl.stage, "past_t1")
+        self.assertIsNotNone(fl.now_stop)
+        self.assertIn("现在减半", fl.now_do)
+        # 减半是现在做；T2 只给剩仓，二者不能混成同一个「下一动作价」
+        self.assertIsNotNone(fl.remain_target)
+        self.assertGreater(fl.remain_target or 0, 1011.0)
+        self.assertNotEqual(fl.now_do, fl.remain_label)
+        self.assertIn("只跟", fl.rule_one_liner)
 
     def test_journal_roundtrip(self):
         import os
