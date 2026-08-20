@@ -394,14 +394,22 @@ def mtf_bundle(
     daily_df: pd.DataFrame,
     entry_low: float | None,
     entry_high: float | None,
+    *,
+    include_h1: bool = True,
 ) -> dict[str, Any]:
-    """Weekly + ADX + Fib + 1H in one call."""
+    """Weekly + ADX + Fib, with optional 1H timing confirmation."""
     weekly = analyze_weekly_filter(symbol)
     adx = analyze_adx(daily_df)
     fib = analyze_fib_levels(daily_df)
     # refine zone then 1H
     new_lo, new_hi, fib_note = merge_entry_with_fib(entry_low, entry_high, fib)
-    h1 = analyze_h1_trigger(symbol, new_lo, new_hi)
+    if include_h1:
+        h1 = analyze_h1_trigger(symbol, new_lo, new_hi)
+    else:
+        h1 = H1TriggerReport(
+            summary="候选前筛选未取1H数据。",
+            available=False,
+        )
     return {
         "weekly": weekly,
         "adx": adx,

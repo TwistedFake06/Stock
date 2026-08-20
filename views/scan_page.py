@@ -227,7 +227,19 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                         risk_pct=float(risk_pct),
                         primary_horizon=primary_horizon,
                         mode=mode_key,
+                        include_h1=False,
                     )
+                    if sop.enter_ok in ("适合入场", "谨慎试仓"):
+                        sop = build_trade_sop(
+                            sym,
+                            period=period,
+                            interval=interval,
+                            capital=float(capital),
+                            risk_pct=float(risk_pct),
+                            primary_horizon=primary_horizon,
+                            mode=mode_key,
+                            include_h1=True,
+                        )
                     h1 = getattr(sop, "swing_h1", None)
                     h2 = getattr(sop, "swing_h2", None)
                     prim = getattr(sop, "primary_plan", None) or h1

@@ -1935,6 +1935,7 @@ def build_trade_sop(
     primary_horizon: str = "h1",
     mode: str = "defensive",
     force_defensive: bool = False,
+    include_h1: bool = True,
     as_of: date | datetime | str | None = None,
 ) -> TradeSOP:
     """
@@ -1945,6 +1946,7 @@ def build_trade_sop(
 
     mode: ``defensive`` (A 防守版) | ``aggressive`` (B 进攻版)
     force_defensive: 连续亏损等场景由 UI/日志强制 A
+    include_h1: 是否取 1H 数据作短线入场确认；扫描预筛选可关闭。
     as_of: 若提供，仅用该日及之前的日线重建计划（入场日锁定 E/S/T/阻力），
            不含未来 K 线；1H/新闻等「今日实时」信号会跳过。
     """
@@ -2124,7 +2126,7 @@ def build_trade_sop(
             e_low, e_high, fib_note = merge_entry_with_fib(e_low, e_high, fib_r)
             fib_note = str(fib_note or "")
         else:
-            mtf = mtf_bundle(sym, df, e_low, e_high)
+            mtf = mtf_bundle(sym, df, e_low, e_high, include_h1=include_h1)
             weekly = mtf.get("weekly")
             adx_r = mtf.get("adx")
             fib_r = mtf.get("fib")
