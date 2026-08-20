@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, time
+from zoneinfo import ZoneInfo
 from typing import Any
 
 import numpy as np
@@ -329,8 +330,11 @@ STOP_ATR_CAP = 1.5  # 止损距离上限（ATR 倍数）
 STOP_ATR_FLOOR = 0.6  # 止损距离下限（ATR 倍数）
 
 # 部署指纹：Streamlit Cloud 侧栏应显示同一字串；否则仍是旧代码
-# v1-realism：路径胜率更保守 + 样本门槛上调 + ATR prefer_structure + 滑点 0.30%
-SOP_BUILD = "v1-realism-2026-08-18"
+# v1-realism-opt：時間窗口自動閘門 + 周線偏空硬擋 + 作息友善
+SOP_BUILD = "v1-realism-2026-08-20-opt"
+
+# 時間窗口硬規則開關（True = 窗口外強制觀望）
+ENFORCE_US_OPEN_FIRST_2H = True
 
 MODE_THRESHOLDS: dict[str, ModeThresholds] = {
     "defensive": ModeThresholds(
@@ -373,6 +377,48 @@ def get_mode_thresholds(mode: str) -> ModeThresholds:
     elif key in ("b", "进攻", "进攻版", "進攻", "進攻版", "agg", "attack"):
         key = "aggressive"
     return MODE_THRESHOLDS.get(key, MODE_THRESHOLDS["defensive"])
+
+
+def is_us_open_first_2h(now: datetime | None = None) -> tuple[bool, str]:
+    """
+    判斷當下是否在美股常規交易時段開市後的首 2 小時。
+
+    Returns:
+        (is_allowed, note)
+    時間換算（香港時間）：
+      夏令 EDT：21:30 – 23:30 HKT
+      冬令 EST：22:30 – 00:30 HKT
+    """
+    try:
+        hkt = ZoneInfo("Asia/Hong_Kong")
+        et = ZoneInfo("US/Eastern")
+    except Exception:
+        return True, "時區模組不可用，跳過時間窗口檢查"
+
+    if now is None:
+        now = datetime.now(hkt)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=hkt)
+    else:
+        now = now.astimezone(hkt)
+
+    et_now = now.astimezone(et)
+
+    if et_now.weekday() >= 5:
+        return False, f"週末（ET {et_now.strftime('%a %H:%M')}），非操作時段"
+
+    open_t = time(9, 30)
+    end_t = time(11, 30)
+
+    t = et_now.time()
+    if open_t <= t <= end_t:
+        return True, f"在允許窗口內（ET {et_now.strftime('%H:%M')}，開市後首2小時）"
+
+    if t < open_t:
+        return False, f"尚未開市（ET 現在 {et_now.strftime('%H:%M')}，開市 09:30）"
+    return False, f"已過開市首2小時（ET 現在 {et_now.strftime('%H:%M')}，窗口至 11:30）"
+
+
 
 
 # Path WR quality tiers（优化后）
@@ -892,6 +938,27 @@ def decide_three_lights(
     三灯裁决：位置 · 胜率 · 划算 → 可以入場 | 可以試倉 | 暫緩觀望 | 不做多
     财报窗口（Yahoo 日历）：≤3 天强制暂缓新仓；≤14 天最多试仓。
     """
+
+    # ========== 時間窗口硬閘門（最高優先）==========
+    if ENFORCE_US_OPEN_FIRST_2H:
+        allowed, time_note = is_us_open_first_2h()
+        if not allowed:
+            return {
+                "verdict": "暫緩觀望",
+                "position_light": "red",
+                "wr_light": "red",
+                "rr_light": "red",
+                "position_light_note": time_note,
+                "wr_light_note": "非操作時段",
+                "rr_light_note": "非操作時段",
+                "one_liner_reason": time_note,
+                "plain_card": f"**暫緩觀望**（時間窗口）。{time_note}。窗口外不新開倉，已持倉只執行預設止蝕/T1。",
+                "win_hkd": None,
+                "loss_hkd": None,
+                "hard_no": time_note,
+                "caps": ["非操作時段"],
+            }
+
     pos_l, pos_n = compute_position_light(
         last=last,
         entry_low=entry_low,
@@ -913,13 +980,14 @@ def decide_three_lights(
         hard_no = "方向看空且偏弱，不做多"
     elif vol_label == "放量下跌":
         hard_no = "放量下跌，今天不做多"
+    elif not weekly_allow_long:
+        # 周線偏空直接硬擋（不再只是最多試倉）→ 提升勝率
+        hard_no = "周線偏空，強制觀望（提升勝率）"
 
     # 盖帽：最多试仓（黄）
     caps: list[str] = []
     if false_break_risk:
         caps.append("假突破风险")
-    if not weekly_allow_long:
-        caps.append("周线偏空")
     if against_trend:
         caps.append("逆势环境")
     # 财报：≤3 天不新开；≤14 天最多试仓（免费 Yahoo 日历，已有）
@@ -1267,13 +1335,8 @@ def _swing_verdict(
     if "看空" in bias_label and bias_score <= -25:
         return "不做多"
     if not weekly_allow_long:
-        # 周线空头：防守版更严；进攻版最多试仓
-        if thr.key == "defensive":
-            if bias_score < 0 or entry_opp in ("偏空回避", "不宜追高"):
-                return "不做多"
-        else:
-            if bias_score < -10 or entry_opp in ("偏空回避",):
-                return "不做多"
+        # 統一：周線偏空一律不給新開倉機會（高勝率優先）
+        return "暫緩觀望"
     if price_far_chase or entry_opp == "不宜追高":
         return "暫緩觀望"
     if vol_label == "放量下跌":
@@ -1377,10 +1440,6 @@ def _swing_verdict(
         if entry_opp in ("偏空回避",):
             return "暫緩觀望"
         if against_trend:
-            return "暫緩觀望"
-        if not weekly_allow_long:
-            if good_setup and not false_break_risk and wr_half_ok:
-                return "可以試倉"
             return "暫緩觀望"
         if false_break_risk or shrink_fbo:
             if thr.key == "aggressive" and good_setup and wr_half_ok and rr_ok:
