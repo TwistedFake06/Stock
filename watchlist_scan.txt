@@ -43,3 +43,30 @@ NEE
 LIN
 # Consumer discretionary
 HD
+
+# Sector leaders (精简补强)
+# Semiconductors supply chain
+TSM
+ASML
+AVGO
+# Software / cloud
+CRM
+# Payments / fintech
+V
+MA
+# Banks (beyond JPM)
+BAC
+# Healthcare leaders
+UNH
+LLY
+# Industrials
+GE
+# Energy (beyond XOM)
+CVX
+# REITs
+PLD
+# Sector ETFs (strength cross-check)
+XLK
+XLF
+XLE
+XLV
