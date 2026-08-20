@@ -933,6 +933,7 @@ def decide_three_lights(
     weekly_allow_long: bool = True,
     notional_hkd: float = DEFAULT_NOTIONAL_HKD,
     earnings_days_left: int | None = None,
+    enforce_time_window: bool = False,
 ) -> dict[str, Any]:
     """
     三灯裁决：位置 · 胜率 · 划算 → 可以入場 | 可以試倉 | 暫緩觀望 | 不做多
@@ -940,7 +941,7 @@ def decide_three_lights(
     """
 
     # ========== 時間窗口硬閘門（最高優先）==========
-    if ENFORCE_US_OPEN_FIRST_2H:
+    if ENFORCE_US_OPEN_FIRST_2H and enforce_time_window:
         allowed, time_note = is_us_open_first_2h()
         if not allowed:
             return {
@@ -953,8 +954,9 @@ def decide_three_lights(
                 "rr_light_note": "非操作時段",
                 "one_liner_reason": time_note,
                 "plain_card": f"**暫緩觀望**（時間窗口）。{time_note}。窗口外不新開倉，已持倉只執行預設止蝕/T1。",
-                "win_hkd": None,
-                "loss_hkd": None,
+                "pnl_if_win_hkd": None,
+                "pnl_if_loss_hkd": None,
+                "notional_hkd": float(notional_hkd),
                 "hard_no": time_note,
                 "caps": ["非操作時段"],
             }
@@ -1525,6 +1527,7 @@ def _build_swing_plan(
     last_price: float | None = None,
     notional_hkd: float = DEFAULT_NOTIONAL_HKD,
     earnings_days_left: int | None = None,
+    enforce_time_window: bool = False,
 ) -> SwingHorizonPlan:
     thr = mode or MODE_THRESHOLDS["defensive"]
     risk_ps = None
@@ -1596,6 +1599,7 @@ def _build_swing_plan(
             weekly_allow_long=weekly_allow_long,
             notional_hkd=notional_hkd,
             earnings_days_left=earnings_days_left,
+            enforce_time_window=enforce_time_window,
         )
         verdict = tl["verdict"]
         note_bits = [
@@ -2326,6 +2330,7 @@ def build_trade_sop(
         last_price=float(last) if last is not None else None,
         notional_hkd=DEFAULT_NOTIONAL_HKD,
         earnings_days_left=earnings_days_left,
+        enforce_time_window=as_of is None,
     )
     swing_h1 = _build_swing_plan(
         key="h1",
@@ -2435,6 +2440,7 @@ def build_trade_sop(
         weekly_allow_long=bool(weekly_allow),
         notional_hkd=DEFAULT_NOTIONAL_HKD,
         earnings_days_left=earnings_days_left,
+        enforce_time_window=as_of is None,
     )
     if THREE_LIGHT_SOP:
         primary.verdict = tl_main["verdict"]

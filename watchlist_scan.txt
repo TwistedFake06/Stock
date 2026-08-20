@@ -20,3 +20,26 @@ SNDK
 VRT
 SMCI
 NFLX
+
+# Non-technology sector leaders
+# Financials
+JPM
+BRK-B
+# Healthcare
+JNJ
+ABBV
+# Consumer staples / defensive retail
+WMT
+COST
+PG
+KO
+# Energy
+XOM
+# Industrials
+CAT
+# Utilities
+NEE
+# Materials
+LIN
+# Consumer discretionary
+HD

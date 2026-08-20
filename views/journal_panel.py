@@ -64,6 +64,31 @@ def render_journal_panel(
         )
         j5.metric("持仓中", stats.get("open") or 0)
 
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric(
+            "累计R",
+            f"{stats['total_r']:+.2f}" if stats.get("total_r") is not None else "—",
+        )
+        r2.metric(
+            "Profit Factor",
+            f"{stats['profit_factor']:.2f}" if stats.get("profit_factor") is not None else "—",
+        )
+        r3.metric(
+            "平均赢亏比",
+            f"{stats['payoff_ratio']:.2f}" if stats.get("payoff_ratio") is not None else "—",
+        )
+        calibration_gap = stats.get("calibration_gap")
+        r4.metric(
+            "模型校准差",
+            f"{calibration_gap:+.1f}%" if calibration_gap is not None else "—",
+            help="模型平均预测胜率减去同批交易的真实胜率；接近 0 较理想。",
+        )
+        if stats.get("calibration_samples"):
+            st.caption(
+                f"模型校准样本 {stats['calibration_samples']} 笔；少于 30 笔只作观察，"
+                "不要据此调高仓位。"
+            )
+
         # ---- write ----
         st.markdown("##### 写入一笔（开仓）")
         c1, c2, c3, c4 = st.columns(4)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -239,6 +240,35 @@ class TestTradeSOPHelpers(unittest.TestCase):
         self.assertEqual(d["wr_light"], "green")
         self.assertEqual(d["rr_light"], "green")
         self.assertIn("结论", d["plain_card"])
+
+    def test_three_light_time_gate_preserves_result_contract(self):
+        thr = MODE_THRESHOLDS["defensive"]
+        with patch(
+            "trade_sop.is_us_open_first_2h",
+            return_value=(False, "窗口外"),
+        ):
+            result = decide_three_lights(
+                thr=thr,
+                last=100.0,
+                entry_low=98.0,
+                entry_high=102.0,
+                entry_plan=100.0,
+                stop=95.0,
+                target=110.0,
+                wr=58.0,
+                wr_samples=20,
+                rr_net=1.25,
+                rr_paper=1.4,
+                price_far_chase=False,
+                entry_opp="较佳入场",
+                bias_label="看多",
+                bias_score=30,
+                enforce_time_window=True,
+            )
+        self.assertEqual(result["verdict"], "暫緩觀望")
+        self.assertEqual(result["notional_hkd"], 5000.0)
+        self.assertIn("pnl_if_win_hkd", result)
+        self.assertIn("pnl_if_loss_hkd", result)
 
     def test_three_light_earnings_blocks_full(self):
         thr = MODE_THRESHOLDS["defensive"]
@@ -799,6 +829,9 @@ class TestTradeSOPHelpers(unittest.TestCase):
                 self.assertEqual(st["closed"], 1)
                 self.assertEqual(st["samples"], 1)
                 self.assertAlmostEqual(st["win_rate"], 100.0, places=0)
+                self.assertAlmostEqual(st["total_r"], 2.0, places=2)
+                self.assertAlmostEqual(st["calibration_gap"], -45.0, places=1)
+                self.assertEqual(st["calibration_samples"], 1)
             finally:
                 if old is None:
                     os.environ.pop("TRADE_JOURNAL_PATH", None)

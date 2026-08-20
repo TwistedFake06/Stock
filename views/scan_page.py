@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from stock_service import DEFAULT_WATCHLIST, normalize_symbol
+from trade_journal import journal_stats
 from trade_sop import build_trade_sop, format_win_rate
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -417,6 +418,21 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         f"IV事件風險標誌 {n_iv_event} 隻 · 放量下跌 {n_vol_dump} 隻 "
         f"（後兩者會壓低入場評級）"
     )
+    realized = journal_stats()
+    if realized.get("closed"):
+        pf = realized.get("profit_factor")
+        gap = realized.get("calibration_gap")
+        pf_text = f"{pf:.2f}" if pf is not None else "—"
+        st.caption(
+            f"实盘对照（{realized['closed']} 笔已平仓）：胜率 "
+            f"{realized['win_rate']:.1f}% · 平均 {realized['avg_r']:+.2f}R · "
+            f"Profit Factor {pf_text}"
+        )
+        if gap is not None:
+            st.caption(
+                f"模型校准差 {gap:+.1f}%（预测减真实，样本 "
+                f"{realized['calibration_samples']}）；接近 0 较理想。"
+            )
 
     st.markdown("### 可入場 / 掃描結果")
     if show.empty:

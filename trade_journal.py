@@ -92,6 +92,14 @@ def _normalize_trade(row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _valid_model_wr(value: Any) -> float | None:
+    try:
+        model_wr = float(value)
+    except (TypeError, ValueError):
+        return None
+    return model_wr if 0 <= model_wr <= 100 else None
+
+
 def load_trades() -> list[dict[str, Any]]:
     path = resolve_journal_path()
     if not path.exists():
@@ -391,11 +399,39 @@ def journal_stats(trades: list[dict[str, Any]] | None = None) -> dict[str, Any]:
             "expectancy_r": None,
             "wins": 0,
             "losses": 0,
+            "total_r": None,
+            "profit_factor": None,
+            "payoff_ratio": None,
+            "calibration_gap": None,
+            "calibration_samples": 0,
             "path": str(resolve_journal_path()),
         }
     wins = [t for t in closed if float(t["result_r"]) > 0]
+    losses = [t for t in closed if float(t["result_r"]) <= 0]
+    total_r = sum(float(t["result_r"]) for t in closed)
     avg_r = sum(float(t["result_r"]) for t in closed) / len(closed)
     wr = 100.0 * len(wins) / len(closed)
+    gross_win_r = sum(float(t["result_r"]) for t in wins)
+    gross_loss_r = abs(sum(float(t["result_r"]) for t in losses))
+    avg_win_r = gross_win_r / len(wins) if wins else None
+    avg_loss_r = gross_loss_r / len(losses) if losses else None
+    calibrated = [
+        (t, model_wr)
+        for t in closed
+        if (model_wr := _valid_model_wr(t.get("model_wr"))) is not None
+    ]
+    predicted_wr = (
+        sum(model_wr for _, model_wr in calibrated) / len(calibrated)
+        if calibrated
+        else None
+    )
+    actual_calibrated_wr = (
+        100.0
+        * sum(1 for t, _ in calibrated if float(t["result_r"]) > 0)
+        / len(calibrated)
+        if calibrated
+        else None
+    )
     pnls = [float(t["pnl_usd"]) for t in closed if t.get("pnl_usd") is not None]
     return {
         "closed": len(closed),
@@ -406,6 +442,19 @@ def journal_stats(trades: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         "total_pnl": round(sum(pnls), 2) if pnls else None,
         "expectancy_r": round(avg_r, 3),
         "wins": len(wins),
-        "losses": len(closed) - len(wins),
+        "losses": len(losses),
+        "total_r": round(total_r, 3),
+        "profit_factor": round(gross_win_r / gross_loss_r, 2) if gross_loss_r else None,
+        "payoff_ratio": (
+            round(avg_win_r / avg_loss_r, 2)
+            if avg_win_r is not None and avg_loss_r
+            else None
+        ),
+        "calibration_gap": (
+            round(predicted_wr - actual_calibrated_wr, 1)
+            if predicted_wr is not None and actual_calibrated_wr is not None
+            else None
+        ),
+        "calibration_samples": len(calibrated),
         "path": str(resolve_journal_path()),
     }
