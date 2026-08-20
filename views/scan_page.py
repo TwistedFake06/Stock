@@ -7,6 +7,8 @@ import pandas as pd
 import streamlit as st
 
 from stock_service import DEFAULT_WATCHLIST, normalize_symbol
+from mtf_signals import analyze_h1_trigger
+from scripts.backtest_watchlist_swing import backtest_symbol, summarize_history
 from trade_journal import journal_stats
 from trade_sop import build_trade_sop, format_win_rate
 
@@ -54,9 +56,9 @@ def _parse_text(raw: str) -> list[str]:
 
 
 def render_scan(period: str, interval: str, period_label: str) -> None:
-    st.markdown("## Watchlist 掃描（短线 0–2周 / 2–4周）")
+    st.markdown("## Watchlist 掃描")
     st.caption(
-        f"極簡預設：只看 **結論 + 三灯 + 一句話 + 掛單/止蝕** · {period_label} · "
+        f"掃全部 · 先看 **結論 + 三燈 + 掛單/止蝕/目標** · {period_label} · "
         "與投資SOP同源 · 非投資建議"
     )
     scan_simple = st.toggle(
@@ -127,6 +129,14 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
             )
         save_list = st.checkbox("寫入 scan 檔", value=True, key="scan_save_list")
 
+    history_col, _ = st.columns([1, 3])
+    with history_col:
+        history_run = st.button(
+            "歷史統計（按需）",
+            use_container_width=True,
+            help="按目前清單逐隻回放約兩年日線，估算每月入場、勝率及盈利。",
+        )
+
     # 未打开 expander 时用 session / 默认，避免 NameError
     src = st.session_state.get("scan_list_src", "編輯下方文字")
     text = st.session_state.get("scan_list_text", default_text)
@@ -138,6 +148,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     save_list = bool(st.session_state.get("scan_save_list", True))
     HKD_PER_USD = 7.8
     capital = float(capital_hkd) / HKD_PER_USD
+    risk_hkd = capital_hkd * risk_pct / 100.0
     primary_horizon = "h1" if horizon_ui == "0–2周" else "h2"
     mode_key = "aggressive" if str(mode_ui).startswith("B") else "defensive"
     st.session_state["sop_mode"] = mode_key
@@ -160,6 +171,105 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         symbols = _parse_text(text)
 
     st.caption(f"將掃描 **{len(symbols)}** 隻：{', '.join(symbols[:12])}{'…' if len(symbols) > 12 else ''}")
+
+    if history_run and not symbols:
+        st.warning("清單係空嘅，無法計算歷史統計。")
+        history_run = False
+
+    if history_run:
+        horizon_days = 10 if primary_horizon == "h1" else 20
+        history_rows: list[dict[str, object]] = []
+        progress = st.progress(0, text="計算歷史統計…")
+        for i, sym in enumerate(symbols):
+            try:
+                trades = backtest_symbol(sym, period="2y", horizon=horizon_days)
+                metrics = summarize_history(
+                    trades, risk_hkd=risk_hkd, observed_months=24
+                )
+                history_rows.append({"代码": sym, **metrics})
+            except Exception as exc:
+                history_rows.append({"代码": sym, "error": f"{type(exc).__name__}: {exc}"})
+            progress.progress((i + 1) / len(symbols), text=f"历史统计 {sym}…")
+        progress.empty()
+        st.session_state["watchlist_history_rows"] = history_rows
+        st.session_state["watchlist_history_horizon"] = horizon_days
+        st.session_state["watchlist_history_symbols"] = tuple(symbols)
+        st.session_state["watchlist_history_risk_hkd"] = risk_hkd
+
+    history_rows = st.session_state.get("watchlist_history_rows") or []
+    history_matches = (
+        tuple(symbols) == tuple(st.session_state.get("watchlist_history_symbols") or ())
+        and (10 if primary_horizon == "h1" else 20)
+        == st.session_state.get("watchlist_history_horizon")
+        and abs(risk_hkd - float(st.session_state.get("watchlist_history_risk_hkd", -1))) < 1e-9
+    )
+    if history_rows and history_matches:
+        history_df = pd.DataFrame(history_rows)
+        trade_counts = pd.to_numeric(
+            history_df.get("trades", pd.Series(index=history_df.index)), errors="coerce"
+        ).fillna(0)
+        valid_history = history_df[trade_counts.gt(0)]
+        st.markdown("### 歷史統計（約兩年日線回放）")
+        if not valid_history.empty:
+            all_trades = int(pd.to_numeric(valid_history["trades"]).sum())
+            total_months = int(pd.to_numeric(valid_history["months"]).max())
+            total_wins = (
+                pd.to_numeric(valid_history["win_rate"]) * pd.to_numeric(valid_history["trades"]) / 100
+            ).sum()
+            total_r = (
+                pd.to_numeric(valid_history["avg_r"]) * pd.to_numeric(valid_history["trades"])
+            ).sum()
+            profitable_month_pct = pd.to_numeric(
+                valid_history["profitable_month_pct"], errors="coerce"
+            ).mean()
+            median_month_hkd = pd.to_numeric(
+                valid_history["median_profit_month_hkd"], errors="coerce"
+            ).sum()
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("平均每月入場", f"{all_trades / max(total_months, 1):.1f} 筆")
+            m2.metric("歷史勝率", f"{100 * total_wins / all_trades:.1f}%")
+            m3.metric(
+                "估算每月賺",
+                f"{total_r * risk_hkd / max(total_months, 1):+,.0f} HKD",
+                help="按每筆固定 1R = 本金 × 風險% 估算，包含超時按收市離場。",
+            )
+            m4.metric(
+                "各股月度中位合計",
+                f"{median_month_hkd:+,.0f} HKD",
+                help="各股票月度盈利中位數的合計，不代表每月所有訊號都可同時成交。",
+            )
+            m5.metric("股票平均盈利月份", f"{profitable_month_pct:.0f}%")
+            with st.expander("每隻股票歷史明細", expanded=False):
+                st.dataframe(
+                    history_df[
+                        [
+                            "代码",
+                            "trades",
+                            "confidence",
+                            "entries_per_month",
+                            "win_rate",
+                            "avg_r",
+                            "profitable_month_pct",
+                            "median_profit_month_hkd",
+                            "profit_per_month_hkd",
+                        ]
+                    ].rename(
+                        columns={
+                            "trades": "交易筆數",
+                            "confidence": "信心",
+                            "entries_per_month": "每月入場",
+                            "win_rate": "勝率%",
+                            "avg_r": "平均R",
+                            "profitable_month_pct": "盈利月份%",
+                            "median_profit_month_hkd": "月度中位HKD",
+                            "profit_per_month_hkd": "每月估算HKD",
+                        }
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+        else:
+            st.info("目前清單沒有足夠歷史入場樣本。")
 
     import hashlib
     import time as _time
@@ -229,16 +339,10 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                         mode=mode_key,
                         include_h1=False,
                     )
+                    h1_trigger = None
                     if sop.enter_ok in ("适合入场", "谨慎试仓"):
-                        sop = build_trade_sop(
-                            sym,
-                            period=period,
-                            interval=interval,
-                            capital=float(capital),
-                            risk_pct=float(risk_pct),
-                            primary_horizon=primary_horizon,
-                            mode=mode_key,
-                            include_h1=True,
+                        h1_trigger = analyze_h1_trigger(
+                            sop.symbol, sop.entry_low, sop.entry_high
                         )
                     h1 = getattr(sop, "swing_h1", None)
                     h2 = getattr(sop, "swing_h2", None)
@@ -336,8 +440,8 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                             "跟势分": getattr(sop, "trend_align_score", None),
                             "逆势": "是" if getattr(sop, "against_trend", False) else "",
                             "周线": getattr(sop, "weekly_label", "—") or "—",
-                            "1H": getattr(sop, "h1_label", "—") or "—",
-                            "1H可掛": "是" if getattr(sop, "h1_ready", False) else "",
+                            "1H": getattr(h1_trigger, "label", "—") or "—",
+                            "1H可掛": "是" if getattr(h1_trigger, "ready", False) else "",
                             "ADX": getattr(sop, "adx_label", "—") or "—",
                             "ADX值": getattr(sop, "adx_value", None),
                             "市场环境": getattr(sop, "regime_label", "—") or "—",
@@ -371,6 +475,35 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
 
     df = pd.DataFrame(rows_all)
 
+    if history_rows and history_matches:
+        history_rank = pd.DataFrame(history_rows).rename(
+            columns={
+                "trades": "歷史樣本",
+                "confidence": "歷史信心",
+                "entries_per_month": "歷史每月入場",
+                "win_rate": "歷史勝率%",
+                "avg_r": "歷史平均R",
+                "profit_per_month_hkd": "歷史每月HKD",
+            }
+        )
+        keep_history = [
+            "代码",
+            "歷史樣本",
+            "歷史信心",
+            "歷史每月入場",
+            "歷史勝率%",
+            "歷史平均R",
+            "歷史每月HKD",
+        ]
+        df = df.merge(
+            history_rank[[c for c in keep_history if c in history_rank.columns]],
+            on="代码",
+            how="left",
+        )
+        history_samples = pd.to_numeric(df.get("歷史樣本"), errors="coerce")
+        history_avg_r = pd.to_numeric(df.get("歷史平均R"), errors="coerce")
+        df["_hist_rank"] = history_avg_r.where(history_samples >= 5)
+
     # filter
     if min_level == "仅适合入场":
         show = df[df["结论"] == "适合入场"]
@@ -379,14 +512,32 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     else:
         show = df
 
-    # sort: 适合 first, then score
+    # Keep every opportunity; historical expectancy only prioritizes within the same verdict.
     order_map = {"适合入场": 0, "谨慎试仓": 1, "观望": 2, "回避": 3}
     df["_ord"] = df["结论"].map(lambda x: order_map.get(x, 9))
-    df = df.sort_values(["_ord", "适合度"], ascending=[True, False]).drop(columns=["_ord"])
+    sort_cols = ["_ord"]
+    ascending = [True]
+    if "_hist_rank" in df.columns:
+        sort_cols.append("_hist_rank")
+        ascending.append(False)
+    sort_cols.append("适合度")
+    ascending.append(False)
+    df = df.sort_values(sort_cols, ascending=ascending, na_position="last").drop(
+        columns=["_ord", "_hist_rank"], errors="ignore"
+    )
     show = show.copy()
     if not show.empty:
         show["_ord"] = show["结论"].map(lambda x: order_map.get(x, 9))
-        show = show.sort_values(["_ord", "适合度"], ascending=[True, False]).drop(columns=["_ord"])
+        show_sort_cols = ["_ord"]
+        show_ascending = [True]
+        if "_hist_rank" in show.columns:
+            show_sort_cols.append("_hist_rank")
+            show_ascending.append(False)
+        show_sort_cols.append("适合度")
+        show_ascending.append(False)
+        show = show.sort_values(
+            show_sort_cols, ascending=show_ascending, na_position="last"
+        ).drop(columns=["_ord", "_hist_rank"], errors="ignore")
 
     # summary metrics
     n_all = len(df)
@@ -395,7 +546,6 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     n_wait = int((df["结论"] == "观望").sum())
     n_avoid = int((df["结论"] == "回避").sum())
     n_enter = n_suit + n_caut
-    wr_all = pd.to_numeric(df["胜率%"], errors="coerce").dropna()
     wr_enter = pd.to_numeric(
         df.loc[df["结论"].isin(["适合入场", "谨慎试仓"]), "胜率%"], errors="coerce"
     ).dropna()
@@ -405,24 +555,19 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     n_iv_event = int((df["IV事件"] == "是").sum()) if "IV事件" in df.columns else 0
     n_vol_dump = int((df["量能"] == "放量下跌").sum()) if "量能" in df.columns else 0
 
-    m1, m2, m3, m4, m5, m6 = st.columns(6)
-    m1.metric("适合入场", n_suit)
-    m2.metric("谨慎试仓", n_caut)
-    m3.metric(
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("今日機會", n_enter, f"適合 {n_suit} · 謹慎 {n_caut}")
+    m2.metric(
         "入場率",
         f"{100 * n_enter / n_all:.0f}%" if n_all else "—",
         f"{n_enter}/{n_all}",
     )
-    m4.metric(
-        "平均勝率(全)",
-        f"{wr_all.mean():.0f}%" if len(wr_all) else "—",
-    )
-    m5.metric(
-        "平均勝率(可開)",
+    m3.metric(
+        "候選平均勝率",
         f"{wr_enter.mean():.0f}%" if len(wr_enter) else "—",
     )
-    m6.metric(
-        "平均E[R](可開)",
+    m4.metric(
+        "候選平均E[R]",
         f"{exp_enter.mean():+.2f}" if len(exp_enter) else "—",
     )
     st.caption(
@@ -451,20 +596,24 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         st.warning("以目前過濾條件，沒有可顯示標的。可改「顯示級別」為「全部」。")
     else:
         if scan_simple:
+            show = show.copy()
+            show["三燈"] = (
+                show["位置灯"].fillna("—")
+                + " / "
+                + show["胜率灯"].fillna("—")
+                + " / "
+                + show["划算灯"].fillna("—")
+            )
             display_cols = [
                 "代码",
                 "主结论",
-                "位置灯",
-                "胜率灯",
-                "划算灯",
+                "三燈",
                 "一句话",
-                "阻力",
-                "支撑",
-                "财报天",
                 "现价",
                 "掛單",
                 "止蝕",
                 "目标0-2周",
+                "1H",
             ]
         else:
             display_cols = [
@@ -499,18 +648,18 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
             height=min(520, 48 + 36 * len(show)),
         )
 
-    # detail cards for enterable
+    # Candidate details stay available without making the default page excessively long.
     enterable = df[df["结论"].isin(["适合入场", "谨慎试仓"])]
     if not enterable.empty:
-        st.markdown("### 詳情卡（适合 / 谨慎）")
+        st.markdown("### 候選詳情")
         for _, row in enterable.iterrows():
             title = f"{row['代码']} · {row.get('主结论', row['结论'])}（{row['适合度']:.0f}）"
             if row["结论"] == "适合入场":
                 box = st.success
             else:
                 box = st.warning
-            with st.container(border=True):
-                box(f"**{title}** · {row['名称']}")
+            with st.expander(title, expanded=False):
+                box(f"**{row['结论']}** · {row['名称']}")
                 lights = (
                     f"位置 **{row.get('位置灯', '—')}** · "
                     f"胜率 **{row.get('胜率灯', '—')}** · "

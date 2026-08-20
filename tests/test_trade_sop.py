@@ -21,7 +21,7 @@ from position_coach import (
     analyze_entry_vs_live,
     build_follow_levels,
 )
-from mtf_signals import analyze_adx, analyze_fib_levels, merge_entry_with_fib
+from mtf_signals import analyze_adx, analyze_fib_levels, analyze_h1_trigger, merge_entry_with_fib
 from indicators import enrich
 from trade_journal import add_trade, close_trade, journal_stats, load_trades, save_trades
 from free_data import analyze_liquidity, multi_horizon_rs
@@ -55,6 +55,20 @@ from trade_sop import (
 
 
 class TestTradeSOPHelpers(unittest.TestCase):
+    @patch("mtf_signals.fetch_history")
+    def test_h1_trigger_example(self, fetch_history):
+        close = pd.Series(np.linspace(100.0, 110.0, 40))
+        fetch_history.return_value = pd.DataFrame(
+            {
+                "Close": close,
+                "Volume": np.full(40, 1000.0),
+            }
+        )
+        report = analyze_h1_trigger("AAPL", 108.0, 112.0)
+        self.assertTrue(report.available)
+        self.assertEqual(report.label, "可掛單")
+        fetch_history.assert_called_once_with("AAPL", period="60d", interval="1h")
+
     def test_path_win_rate_runs(self):
         rng = np.random.default_rng(0)
         # mild uptrend noise

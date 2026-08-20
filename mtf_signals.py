@@ -403,13 +403,7 @@ def mtf_bundle(
     fib = analyze_fib_levels(daily_df)
     # refine zone then 1H
     new_lo, new_hi, fib_note = merge_entry_with_fib(entry_low, entry_high, fib)
-    if include_h1:
-        h1 = analyze_h1_trigger(symbol, new_lo, new_hi)
-    else:
-        h1 = H1TriggerReport(
-            summary="候选前筛选未取1H数据。",
-            available=False,
-        )
+    h1 = analyze_h1_trigger(symbol, new_lo, new_hi) if include_h1 else None
     return {
         "weekly": weekly,
         "adx": adx,

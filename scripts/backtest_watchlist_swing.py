@@ -52,6 +52,58 @@ class HistTrade:
     horizon: int
 
 
+def summarize_history(
+    trades: list[HistTrade],
+    *,
+    risk_hkd: float = 500.0,
+    observed_months: int | None = None,
+) -> dict[str, float | int | str]:
+    """Summarize historical entries for the watchlist KPI panel."""
+    if not trades:
+        return {
+            "trades": 0,
+            "months": 0,
+            "entries_per_month": 0.0,
+            "win_rate": None,
+            "avg_r": None,
+            "total_r": 0.0,
+            "profitable_month_pct": None,
+            "median_profit_month_hkd": None,
+            "profit_per_month_hkd": None,
+            "confidence": "样本不足",
+        }
+
+    dates = pd.to_datetime([trade.entry_date for trade in trades])
+    month_index = pd.period_range(dates.min().to_period("M"), dates.max().to_period("M"), freq="M")
+    monthly_r = (
+        pd.Series([float(trade.r_mult) for trade in trades], index=dates.to_period("M"))
+        .groupby(level=0)
+        .sum()
+        .reindex(month_index, fill_value=0.0)
+    )
+    months = max(len(month_index), int(observed_months or 0), 1)
+    if months > len(monthly_r):
+        monthly_r = pd.concat(
+            [monthly_r, pd.Series([0.0] * (months - len(monthly_r)), dtype=float)],
+            ignore_index=True,
+        )
+    wins = sum(1 for trade in trades if trade.result == "win")
+    total_r = sum(float(trade.r_mult) for trade in trades)
+    confidence = "可参考" if len(trades) >= 10 else "低样本" if len(trades) >= 5 else "样本不足"
+    return {
+        "trades": len(trades),
+        "months": months,
+        "entries_per_month": len(trades) / months,
+        "win_rate": 100.0 * wins / len(trades),
+        "avg_r": total_r / len(trades),
+        "total_r": total_r,
+        "profitable_month_pct": 100.0 * float((monthly_r > 0).mean()),
+        "median_profit_month_hkd": float(monthly_r.median()) * risk_hkd,
+        "profit_per_month_hkd": total_r * risk_hkd / months,
+        "confidence": confidence,
+    }
+
+
 def load_symbols(path: Path) -> list[str]:
     raw: list[str] = []
     if path.exists():
