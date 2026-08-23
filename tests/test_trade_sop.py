@@ -21,7 +21,13 @@ from position_coach import (
     analyze_entry_vs_live,
     build_follow_levels,
 )
-from mtf_signals import analyze_adx, analyze_fib_levels, analyze_h1_trigger, merge_entry_with_fib
+from mtf_signals import (
+    analyze_adx,
+    analyze_fib_levels,
+    analyze_h1_trigger,
+    detect_weekly_turning_bullish,
+    merge_entry_with_fib,
+)
 from indicators import enrich
 from trade_journal import add_trade, close_trade, journal_stats, load_trades, save_trades
 from free_data import analyze_liquidity, multi_horizon_rs
@@ -712,6 +718,66 @@ class TestTradeSOPHelpers(unittest.TestCase):
         )
         # 周线空头不能「可以入場」
         self.assertNotEqual(v, "可以入場")
+
+    def test_weekly_turning_bullish_reclaim_sma20(self):
+        # 深跌在均线下 → 不算转多
+        close = pd.Series([100.0] * 20 + [80.0, 81.0])
+        sma20 = float(close.tail(20).mean())
+        ok, _ = detect_weekly_turning_bullish(
+            close, allow_long=False, score=20.0, last=float(close.iloc[-1]), sma20=sma20
+        )
+        self.assertFalse(ok)
+        # 站上 SMA20 但没有连续两周收高 → 收紧后不算转多
+        one_week = np.linspace(90.0, 100.0, 22)
+        one_week[-3] = 101.0
+        one_week[-2] = 99.0  # 低于上上周
+        one_week[-1] = 102.0
+        s1 = pd.Series(one_week)
+        sma1 = float(s1.tail(20).mean())
+        ok1, _ = detect_weekly_turning_bullish(
+            s1, allow_long=False, score=35.0, last=float(s1.iloc[-1]), sma20=sma1
+        )
+        self.assertFalse(ok1)
+        # 站上均线 + 两周收高 → 算转多
+        base = np.linspace(90.0, 100.0, 22)
+        base[-3] = 99.0
+        base[-2] = 100.5
+        base[-1] = 102.0
+        s = pd.Series(base)
+        sma = float(s.tail(20).mean())
+        self.assertGreater(float(s.iloc[-1]), sma)
+        ok2, note = detect_weekly_turning_bullish(
+            s, allow_long=False, score=35.0, last=float(s.iloc[-1]), sma20=sma
+        )
+        self.assertTrue(ok2)
+        self.assertIn("转多", note)
+        self.assertIn("两周收高", note)
+
+    def test_weekly_turning_allows_trial_not_full(self):
+        thr = MODE_THRESHOLDS["defensive"]
+        kwargs = dict(
+            thr=thr,
+            last=100.0,
+            entry_low=98.0,
+            entry_high=102.0,
+            entry_plan=100.0,
+            stop=95.0,
+            target=112.0,
+            wr=58.0,
+            wr_samples=20,
+            rr_net=1.25,
+            rr_paper=1.4,
+            price_far_chase=False,
+            entry_opp="较佳入场",
+            bias_label="看多",
+            bias_score=30,
+            weekly_allow_long=False,
+        )
+        blocked = decide_three_lights(**kwargs)
+        self.assertEqual(blocked["verdict"], "不做多")
+        trial = decide_three_lights(**kwargs, weekly_turning_bullish=True)
+        self.assertEqual(trial["verdict"], "可以試倉")
+        self.assertIn("开始转多", trial["one_liner_reason"] + "".join(trial.get("caps") or []))
 
     def test_slippage_rr_worse_than_paper(self):
         slip = apply_long_slippage(100.0, 95.0, 110.0, win_rate_pct=55, slip_pct=0.002)

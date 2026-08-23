@@ -67,7 +67,7 @@ def render_extra(symbol: str, period: str, interval: str, period_label: str, int
                     card.risk_score,
                     card.rs_score,
                 ),
-                use_container_width=True,
+                width="stretch",
             )
         with sc2:
             stance_color = (
@@ -126,7 +126,7 @@ def render_extra(symbol: str, period: str, interval: str, period_label: str, int
             if risk.equity_curve is not None and risk.drawdown_curve is not None:
                 mobile_plotly(
                     drawdown_chart(risk.equity_curve, risk.drawdown_curve),
-                    use_container_width=True,
+                    width="stretch",
                 )
             st.caption(
                 f"平均阳线 {fmt_pct(risk.avg_up_pct)} · 平均阴线 {fmt_pct(risk.avg_down_pct)}"
@@ -152,7 +152,7 @@ def render_extra(symbol: str, period: str, interval: str, period_label: str, int
 
             mobile_plotly(
                 sr_chart(df.tail(120), sr.levels, title=f"{symbol} 支撑/阻力"),
-                use_container_width=True,
+                width="stretch",
             )
             if sr.levels:
                 lv_df = pd.DataFrame(
@@ -166,7 +166,7 @@ def render_extra(symbol: str, period: str, interval: str, period_label: str, int
                         for lv in sorted(sr.levels, key=lambda x: -x.price)
                     ]
                 )
-                st.dataframe(lv_df, use_container_width=True, hide_index=True)
+                st.dataframe(lv_df, width="stretch", hide_index=True)
 
         # ---- Trend ----
         with tabs[2]:
@@ -191,7 +191,7 @@ def render_extra(symbol: str, period: str, interval: str, period_label: str, int
                     show_bb=False,
                     show_volume=True,
                 ),
-                use_container_width=True,
+                width="stretch",
             )
 
         # ---- Fundamentals ----
@@ -215,7 +215,7 @@ def render_extra(symbol: str, period: str, interval: str, period_label: str, int
                     }
                     for it in funda.items
                 ]
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
             # Company snapshot
             with st.expander("公司快照（原始字段）", expanded=False):
@@ -247,7 +247,7 @@ def render_extra(symbol: str, period: str, interval: str, period_label: str, int
                         rs.relative_curve,
                         title=f"{symbol} vs {bench_label}",
                     ),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
         # ---- Volume ----
@@ -263,7 +263,7 @@ def render_extra(symbol: str, period: str, interval: str, period_label: str, int
             st.caption(vol_rep.obv_trend)
             mobile_plotly(
                 price_volume_chart(df, title=f"{symbol} 量价", show_sma=True, show_volume=True),
-                use_container_width=True,
+                width="stretch",
             )
 
         st.info(

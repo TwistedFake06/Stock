@@ -74,11 +74,11 @@ def render_backtest() -> None:
             ["SPY", "VOO", "QQQ"],
             index=0,
         )
-        rerun_one = st.button(f"重跑 {sel} · {strategy}", type="primary", use_container_width=True)
+        rerun_one = st.button(f"重跑 {sel} · {strategy}", type="primary", width="stretch")
     with b2:
         st.write("")
         st.write("")
-        rerun_all = st.button("重跑 SPY/VOO/QQQ", use_container_width=True)
+        rerun_all = st.button("重跑 SPY/VOO/QQQ", width="stretch")
 
     if rerun_one or rerun_all:
         targets = [sel] if rerun_one else ["SPY", "VOO", "QQQ"]
@@ -126,7 +126,7 @@ def render_backtest() -> None:
 
     if "r_multiple" not in trades.columns or "pnl" not in trades.columns:
         st.error("CSV 缺少 r_multiple / pnl 列。")
-        st.dataframe(trades, use_container_width=True, hide_index=True)
+        st.dataframe(trades, width="stretch", hide_index=True)
         return
 
     if "entry_date" in trades.columns:
@@ -182,4 +182,4 @@ def render_backtest() -> None:
             "%Y-%m-%d"
         )
     st.subheader("交易明细")
-    st.dataframe(show.iloc[::-1], use_container_width=True, hide_index=True)
+    st.dataframe(show.iloc[::-1], width="stretch", hide_index=True)

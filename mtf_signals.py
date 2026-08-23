@@ -31,6 +31,9 @@ class WeeklyFilterReport:
     sma50: float | None = None
     summary: str = ""
     available: bool = False
+    # 仍标空头，但结构开始转多 → 上层最多试仓，不硬挡
+    turning_bullish: bool = False
+    turning_note: str = ""
 
 
 @dataclass
@@ -73,10 +76,50 @@ class FibReport:
     available: bool = False
 
 
+def detect_weekly_turning_bullish(
+    close: pd.Series,
+    *,
+    allow_long: bool,
+    score: float,
+    last: float,
+    sma20: float | None,
+) -> tuple[bool, str]:
+    """
+    周线仍空头时，是否「开始看多」。
+
+    必须同时：
+      1) 周收站上 SMA20
+      2) 连续两周收高（本周 > 上周 > 上上周）
+    仅刚站上均线、或仅 SMA20 拐头，不再单独放行（减少一周假转多）。
+    """
+    if allow_long or sma20 is None or last is None:
+        return False, ""
+    if last < float(sma20) * 0.995:
+        return False, ""
+    higher_weeks = False
+    if close is not None and len(close) >= 3:
+        c1, c2, c0 = float(close.iloc[-3]), float(close.iloc[-2]), float(close.iloc[-1])
+        higher_weeks = c0 > c2 > c1
+    if not (last > float(sma20) and higher_weeks):
+        return False, ""
+    bits: list[str] = ["连续两周收高"]
+    prev = float(close.iloc[-2]) if close is not None and len(close) >= 2 else None
+    if prev is not None and prev <= float(sma20) and last > float(sma20):
+        bits.append("周收重新站上SMA20")
+    elif prev is not None and prev > float(sma20):
+        bits.append("连续站上SMA20")
+    if close is not None and len(close) >= 21:
+        sma20_ex = float(close.iloc[-21:-1].mean())
+        if float(sma20) > sma20_ex * 1.0005:
+            bits.append("SMA20开始拐头向上")
+    note = "周线空头但开始转多（" + "；".join(bits) + "）"
+    return True, note
+
+
 def analyze_weekly_filter(symbol: str) -> WeeklyFilterReport:
     """
     Weekly SMA20/50 filter for short-term longs.
-    周线空头 → 不鼓励做多波段（最多试仓由上层决定）.
+    周线空头 → 默认不鼓励做多；若开始转多，由上层最多试仓。
     """
     df = fetch_history(normalize_symbol(symbol), period="3y", interval="1wk")
     if df.empty or len(df) < 25 or "Close" not in df.columns:
@@ -115,14 +158,21 @@ def analyze_weekly_filter(symbol: str) -> WeeklyFilterReport:
     else:
         label = "周线中性"
         allow = True
+    turning, turning_note = detect_weekly_turning_bullish(
+        close, allow_long=allow, score=score, last=last, sma20=sma20
+    )
     summary = f"**{label}**（{score:.0f}）· 周收 {last:.2f}"
     if sma20:
         summary += f" · SMA20 {sma20:.2f}"
     if sma50:
         summary += f" · SMA50 {sma50:.2f}"
-    if not allow:
+    if not allow and turning:
+        summary += " · 空头但开始转多：最多试仓（不硬挡）"
+    elif not allow:
         summary += " · 大周期空头：短线做多降级/暂缓"
     summary += "。"
+    if turning_note:
+        summary += turning_note + "。"
     return WeeklyFilterReport(
         label=label,
         allow_long=allow,
@@ -132,6 +182,8 @@ def analyze_weekly_filter(symbol: str) -> WeeklyFilterReport:
         sma50=round(sma50, 4) if sma50 else None,
         summary=summary,
         available=True,
+        turning_bullish=bool(turning),
+        turning_note=turning_note,
     )
 
 

@@ -38,13 +38,13 @@ def render_technical(
         show_bb=show_bb,
         show_volume=show_vol,
     )
-    mobile_plotly(fig, use_container_width=True)
+    mobile_plotly(fig, width="stretch")
 
     c1, c2 = st.columns(2)
     with c1:
-        mobile_plotly(rsi_chart(df), use_container_width=True)
+        mobile_plotly(rsi_chart(df), width="stretch")
     with c2:
-        mobile_plotly(macd_chart(df), use_container_width=True)
+        mobile_plotly(macd_chart(df), width="stretch")
 
     last = df.iloc[-1]
     st.subheader("最新指标快照")

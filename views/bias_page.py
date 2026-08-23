@@ -44,13 +44,13 @@ def render_bias_page(
             show_bb=True,
             show_volume=True,
         )
-        mobile_plotly(fig, use_container_width=True)
+        mobile_plotly(fig, width="stretch")
 
         col_a, col_b = st.columns(2)
         with col_a:
-            mobile_plotly(rsi_chart(df), use_container_width=True)
+            mobile_plotly(rsi_chart(df), width="stretch")
         with col_b:
-            mobile_plotly(macd_chart(df), use_container_width=True)
+            mobile_plotly(macd_chart(df), width="stretch")
 
         st.subheader("信号明细表")
         rows = [
@@ -62,7 +62,7 @@ def render_bias_page(
             }
             for s in report.signals
         ]
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
         rets = compute_returns(df)
         m1, m2, m3 = st.columns(3)

@@ -96,7 +96,7 @@ def render_watchlist(period: str, interval: str) -> None:
         order = table["得分"].fillna(0).sort_values(ascending=False).index
         display = display.loc[order]
 
-    st.dataframe(display, use_container_width=True, hide_index=True)
+    st.dataframe(display, width="stretch", hide_index=True)
     st.caption("自选列表按多空得分从高到低排序（看多在前）。")
 
     st.subheader("操作")

@@ -376,7 +376,7 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
     structure_bits: list[str] = []
     load_err: str | None = None
 
-    if st.button("生成持仓建议", type="primary", use_container_width=True, key="hold_page_go"):
+    if st.button("生成持仓建议", type="primary", width="stretch", key="hold_page_go"):
         st.session_state["hold_page_ran"] = True
         st.session_state[f"hold_buy_{sym}"] = buy_px
         st.session_state[f"hold_sh_{sym}"] = shares

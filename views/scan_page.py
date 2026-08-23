@@ -133,7 +133,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     with history_col:
         history_run = st.button(
             "歷史統計（按需）",
-            use_container_width=True,
+            width="stretch",
             help="按目前清單逐隻回放約兩年日線，估算每月入場、勝率及盈利。",
         )
 
@@ -265,7 +265,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                             "profit_per_month_hkd": "每月估算HKD",
                         }
                     ),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
         else:
@@ -285,9 +285,9 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
 
     b1, b2 = st.columns([2, 1])
     with b1:
-        run = st.button("開始掃描", type="primary", use_container_width=True)
+        run = st.button("開始掃描", type="primary", width="stretch")
     with b2:
-        force = st.button("強制刷新", use_container_width=True, help="忽略快取，重新拉數")
+        force = st.button("強制刷新", width="stretch", help="忽略快取，重新拉數")
 
     cached = st.session_state.get(cache_key)
     cache_age = None
@@ -643,7 +643,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
             ]
         st.dataframe(
             show[[c for c in display_cols if c in show.columns]],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             height=min(520, 48 + 36 * len(show)),
         )
@@ -709,7 +709,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         drop_cols = ["立刻动作", "失效", "板块说明", "量能说明", "IV说明"]
         st.dataframe(
             df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore"),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 

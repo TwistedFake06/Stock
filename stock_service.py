@@ -10,7 +10,7 @@ import pandas as pd
 import yfinance as yf
 
 # US-only quick list (no HK / A-share)
-# 常用置顶：MU / SNDK（侧栏快速选择优先显示）
+# 常用置顶：MU / SNDK；名单=已选热门票（无板块龙头、无 ETF）
 QUICK_PIN = ["MU", "SNDK"]
 DEFAULT_WATCHLIST = [
     "MU",
@@ -22,14 +22,23 @@ DEFAULT_WATCHLIST = [
     "AMZN",
     "META",
     "TSLA",
-    "SPY",
-    "QQQ",
     "AMD",
     "QCOM",
     "ORCL",
     "VRT",
     "SMCI",
     "NFLX",
+    "IONQ",
+    "RGTI",
+    "ONDS",
+    "PLTR",
+    "HOOD",
+    "AVGO",
+    "INTC",
+    "MRVL",
+    "APP",
+    "MSTR",
+    "COIN",
 ]
 
 
@@ -220,14 +229,50 @@ def fetch_history_extended(
     return df
 
 
+# Yahoo quoteSummary often 404s for ETFs; skip ticker.info and use fast_info.
+_ETF_SKIP_FUNDAMENTALS = frozenset(
+    {
+        "SPY",
+        "QQQ",
+        "DIA",
+        "IWM",
+        "VOO",
+        "VTI",
+        "XLK",
+        "XLF",
+        "XLE",
+        "XLV",
+        "XLI",
+        "XLP",
+        "XLU",
+        "XLB",
+        "XLRE",
+        "XLY",
+        "GLD",
+        "SLV",
+        "TLT",
+        "HYG",
+        "EEM",
+        "SOXX",
+        "SMH",
+        "XBI",
+        "ARKK",
+    }
+)
+
+
 def fetch_info(symbol: str) -> dict[str, Any]:
     """Fetch basic quote / company info. Best-effort; fields vary by market."""
     ticker = get_ticker(symbol)
     info: dict[str, Any] = {}
-    try:
-        info = ticker.info or {}
-    except Exception:
-        info = {}
+    sym_n = normalize_symbol(symbol)
+    if sym_n not in _ETF_SKIP_FUNDAMENTALS:
+        try:
+            info = ticker.info or {}
+        except Exception:
+            info = {}
+    else:
+        info = {"quoteType": "ETF", "shortName": sym_n}
 
     # Prefer fast_info for live-ish price when available
     try:

@@ -135,7 +135,7 @@ def render_entry(symbol: str, period: str, interval: str, period_label: str, int
                 ultra_bull=targets.ultra.bull_target if targets.ultra else None,
                 ultra_bear=targets.ultra.bear_target if targets.ultra else None,
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
         # ========== 实用工具 ==========
@@ -172,7 +172,7 @@ def render_entry(symbol: str, period: str, interval: str, period_label: str, int
                     }
                     for s in helpers.take_profits
                 ]
-                st.dataframe(pd.DataFrame(tp_rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(tp_rows), width="stretch", hide_index=True)
 
             st.markdown("**本周观察清单**")
             if helpers.watchlist:
@@ -185,13 +185,13 @@ def render_entry(symbol: str, period: str, interval: str, period_label: str, int
                     }
                     for w in helpers.watchlist
                 ]
-                st.dataframe(pd.DataFrame(w_rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(w_rows), width="stretch", hide_index=True)
 
             st.markdown("**附近关键价位（按距现价排序）**")
             if helpers.key_levels:
                 st.dataframe(
                     pd.DataFrame(helpers.key_levels),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
             st.caption("辅助分析帮助把「看多/看空」落成可执行清单，仍非投资建议。")
@@ -396,7 +396,7 @@ def render_entry(symbol: str, period: str, interval: str, period_label: str, int
                         for it in events.items
                     ]
                 )
-                st.dataframe(ev_df, use_container_width=True, hide_index=True)
+                st.dataframe(ev_df, width="stretch", hide_index=True)
             else:
                 st.info("暂无财报/除息日期（部分 A股/港股字段可能缺失）。")
 
@@ -433,7 +433,7 @@ def render_entry(symbol: str, period: str, interval: str, period_label: str, int
                             for m in h.methods
                         ]
                     ),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
 
@@ -469,7 +469,7 @@ def render_entry(symbol: str, period: str, interval: str, period_label: str, int
                             for s in entry.signals
                         ]
                     ),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
             st.subheader("操作检查清单")

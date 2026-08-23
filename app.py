@@ -92,14 +92,14 @@ streamlit run app.py
     st.stop()
 
 st.set_page_config(
-    page_title="投资SOP · 股票分析",
+    page_title="Dashboard",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="collapsed",  # better for iPhone
     menu_items={
         "Get Help": None,
         "Report a bug": None,
-        "About": "投资SOP · 实盘辅助 · Streamlit Cloud",
+        "About": "Dashboard · 实盘辅助",
     },
 )
 
@@ -240,7 +240,7 @@ with st.sidebar:
     )
     apply_col, tip_col = st.columns([1, 1.2])
     with apply_col:
-        if st.button("应用代码", use_container_width=True, key="btn_apply_symbol"):
+        if st.button("应用代码", width="stretch", key="btn_apply_symbol"):
             box = str(st.session_state.get("symbol_box") or "").strip()
             if box:
                 ns = normalize_symbol(box)
@@ -312,7 +312,7 @@ with st.sidebar:
         if pin_cols[i].button(
             s,
             key=f"quick_pin_{s}",
-            use_container_width=True,
+            width="stretch",
             type="primary",
         ):
             # 确保在自选里
@@ -334,7 +334,7 @@ with st.sidebar:
         st.caption("自选")
         cols = st.columns(2)
         for i, s in enumerate(rest):
-            if cols[i % 2].button(s, key=f"quick_{s}", use_container_width=True):
+            if cols[i % 2].button(s, key=f"quick_{s}", width="stretch"):
                 _request_symbol(s, open_sop=True)
                 st.rerun()
 

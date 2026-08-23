@@ -187,7 +187,7 @@ def render_options(symbol: str) -> None:
                 if rows:
                     st.dataframe(
                         pd.DataFrame(rows),
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                     )
                 st.caption(
@@ -469,13 +469,13 @@ def render_options(symbol: str) -> None:
             st.markdown(steps_html, unsafe_allow_html=True)
 
             with st.expander("买卖两腿 + 流动性明细", expanded=False):
-                st.dataframe(legs_to_frame(best), use_container_width=True, hide_index=True)
+                st.dataframe(legs_to_frame(best), width="stretch", hide_index=True)
 
             mrows = methods_to_rows(best)
             if mrows:
                 with st.expander("热门规则打分（真实盘面 + 常见做法）", expanded=False):
                     st.caption("Yahoo 期权链 · 实盘规则筛子 · 非保证收益")
-                    st.dataframe(pd.DataFrame(mrows), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(mrows), width="stretch", hide_index=True)
 
             ops = getattr(best, "ops_plan", None)
             if ops is not None:
@@ -531,7 +531,7 @@ def render_options(symbol: str) -> None:
                     )
                     with st.expander("最高赢面 · 两腿", expanded=False):
                         st.dataframe(
-                            legs_to_frame(pb_wr), use_container_width=True, hide_index=True
+                            legs_to_frame(pb_wr), width="stretch", hide_index=True
                         )
 
             ptable = getattr(opt_rep, "playbook_table", None) or []
@@ -539,7 +539,7 @@ def render_options(symbol: str) -> None:
                 with st.expander("策略排行榜（可滚）", expanded=False):
                     st.dataframe(
                         pd.DataFrame(ptable),
-                        use_container_width=True,
+                        width="stretch",
                         height=300,
                         hide_index=True,
                     )
@@ -598,7 +598,7 @@ def render_options(symbol: str) -> None:
                 }
             )
             st.markdown("**价位表（可往下滚）**")
-            st.dataframe(ladder, use_container_width=True, height=320, hide_index=True)
+            st.dataframe(ladder, width="stretch", height=320, hide_index=True)
 
             be0 = zones.get("breakeven")
             if be0 is not None and pay_idea.code in ("bull_put", "bull_call"):
@@ -667,7 +667,7 @@ def render_options(symbol: str) -> None:
                 hold_days=int(hold_days),
                 spot_path=path,
             )
-            st.dataframe(daily, use_container_width=True, height=380, hide_index=True)
+            st.dataframe(daily, width="stretch", height=380, hide_index=True)
 
             # 焦点日（兼容新旧列名）
             day_col = "第几天后" if "第几天后" in daily.columns else "第N日"
@@ -729,7 +729,7 @@ def render_options(symbol: str) -> None:
                 else:
                     sort_by = "score"
                 table = ideas_to_frame(opt_rep.ideas, sort_by=sort_by).head(show_n)
-                st.dataframe(table, use_container_width=True, hide_index=True)
+                st.dataframe(table, width="stretch", hide_index=True)
 
             with st.expander("这些「常见做法」从哪来（白话）", expanded=False):
                 st.markdown(

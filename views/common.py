@@ -287,12 +287,12 @@ def render_session_quote_card(symbol: str, info: dict | None = None) -> None:
                     show_sma=False,
                     show_bb=False,
                 )
-                mobile_plotly(fig, use_container_width=True)
+                mobile_plotly(fig, width="stretch")
                 show = ext[["Date", "Open", "High", "Low", "Close", "Volume"]].tail(40).copy()
                 try:
                     show["Date"] = pd.to_datetime(show["Date"]).dt.strftime("%m-%d %H:%M")
                 except Exception:
                     pass
-                st.dataframe(show.iloc[::-1], use_container_width=True, hide_index=True)
+                st.dataframe(show.iloc[::-1], width="stretch", hide_index=True)
         except Exception as exc:
             st.caption(f"分时加载失败：{exc}")

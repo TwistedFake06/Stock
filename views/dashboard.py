@@ -81,12 +81,12 @@ def render_dashboard(
         render_bias_banner(report, compact=True)
 
         fig = price_volume_chart(df, title=f"{symbol} · {period_label} · {interval_label}")
-        mobile_plotly(fig, use_container_width=True)
+        mobile_plotly(fig, width="stretch")
 
         with st.expander("原始数据", expanded=False):
             show = df[["Date", "Open", "High", "Low", "Close", "Volume"]].copy()
             show["Date"] = show["Date"].dt.strftime("%Y-%m-%d")
-            st.dataframe(show.iloc[::-1], use_container_width=True, hide_index=True)
+            st.dataframe(show.iloc[::-1], width="stretch", hide_index=True)
 
     if st.button("⭐ 加入自选"):
         if symbol not in st.session_state.watchlist:

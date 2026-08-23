@@ -177,6 +177,8 @@ class TradeSOP:
     weekly_label: str = "—"
     weekly_summary: str = ""
     weekly_allow_long: bool = True
+    weekly_turning_bullish: bool = False
+    weekly_turning_note: str = ""
     adx_label: str = "—"
     adx_value: float | None = None
     adx_summary: str = ""
@@ -331,7 +333,7 @@ STOP_ATR_FLOOR = 0.6  # 止损距离下限（ATR 倍数）
 
 # 部署指纹：Streamlit Cloud 侧栏应显示同一字串；否则仍是旧代码
 # v1-realism-opt：時間窗口自動閘門 + 周線偏空硬擋 + 作息友善
-SOP_BUILD = "v1-realism-2026-08-20-opt"
+SOP_BUILD = "v1-realism-2026-08-23-wturn2"
 
 # 時間窗口硬規則開關（True = 窗口外強制觀望）
 ENFORCE_US_OPEN_FIRST_2H = True
@@ -931,6 +933,7 @@ def decide_three_lights(
     false_break_risk: bool = False,
     against_trend: bool = False,
     weekly_allow_long: bool = True,
+    weekly_turning_bullish: bool = False,
     notional_hkd: float = DEFAULT_NOTIONAL_HKD,
     earnings_days_left: int | None = None,
     enforce_time_window: bool = False,
@@ -982,9 +985,12 @@ def decide_three_lights(
         hard_no = "方向看空且偏弱，不做多"
     elif vol_label == "放量下跌":
         hard_no = "放量下跌，今天不做多"
-    elif not weekly_allow_long:
-        # 周線偏空直接硬擋（不再只是最多試倉）→ 提升勝率
-        hard_no = "周線偏空，強制觀望（提升勝率）"
+    elif not weekly_allow_long and not weekly_turning_bullish:
+        # 周线空头且未开始转多 → 硬挡
+        hard_no = "周线偏空，强制观望"
+    elif not weekly_allow_long and weekly_turning_bullish:
+        # 仍标空头，但已开始转多 → 不硬挡，最多试仓
+        hard_no = None
 
     # 盖帽：最多试仓（黄）
     caps: list[str] = []
@@ -992,6 +998,8 @@ def decide_three_lights(
         caps.append("假突破风险")
     if against_trend:
         caps.append("逆势环境")
+    if not weekly_allow_long and weekly_turning_bullish:
+        caps.append("周线空头但开始转多")
     # 财报：≤3 天不新开；≤14 天最多试仓（免费 Yahoo 日历，已有）
     earn_block = False
     earn_msg = ""
@@ -1515,6 +1523,7 @@ def _build_swing_plan(
     trend_label: str = "",
     trend_score: float | None = None,
     weekly_allow_long: bool = True,
+    weekly_turning_bullish: bool = False,
     adx_trending: bool | None = None,
     adx_value: float | None = None,
     h1_ready: bool | None = None,
@@ -1597,6 +1606,7 @@ def _build_swing_plan(
             false_break_risk=false_break_risk,
             against_trend=against_trend,
             weekly_allow_long=weekly_allow_long,
+            weekly_turning_bullish=weekly_turning_bullish,
             notional_hkd=notional_hkd,
             earnings_days_left=earnings_days_left,
             enforce_time_window=enforce_time_window,
@@ -2187,6 +2197,8 @@ def build_trade_sop(
         structure_notes.append(stop_adj)
 
     weekly_allow = True if weekly is None else bool(getattr(weekly, "allow_long", True))
+    weekly_turning = bool(getattr(weekly, "turning_bullish", False)) if weekly else False
+    weekly_turn_note = str(getattr(weekly, "turning_note", "") or "") if weekly else ""
     adx_trending = getattr(adx_r, "trending", None) if adx_r else None
     adx_val = getattr(adx_r, "adx", None) if adx_r else None
     h1_ready = getattr(h1_r, "ready", None) if h1_r else None
@@ -2320,6 +2332,7 @@ def build_trade_sop(
         trend_label=trend_lab,
         trend_score=trend_sc,
         weekly_allow_long=weekly_allow,
+        weekly_turning_bullish=weekly_turning,
         adx_trending=adx_trending,
         adx_value=adx_val,
         h1_ready=h1_ready,
@@ -2440,6 +2453,7 @@ def build_trade_sop(
         false_break_risk=bool(fbo_risk),
         against_trend=bool(against_tr),
         weekly_allow_long=bool(weekly_allow),
+        weekly_turning_bullish=weekly_turning,
         notional_hkd=DEFAULT_NOTIONAL_HKD,
         earnings_days_left=earnings_days_left,
         enforce_time_window=as_of is None,
@@ -2890,7 +2904,17 @@ def build_trade_sop(
         if enter_ok in ("适合入场", "谨慎试仓"):
             actions_now.append("跟势环境OK：顺大盘/板块方向在区内做多更稳")
     if weekly is not None and not weekly.allow_long:
-        actions_now.append("周线空头：最多试仓/观望，不按强趋势满仓做多")
+        if getattr(weekly, "turning_bullish", False):
+            actions_now.append(
+                "周线空头但开始转多：最多试仓，不按满仓做多"
+                + (
+                    f"（{weekly.turning_note}）"
+                    if getattr(weekly, "turning_note", "")
+                    else ""
+                )
+            )
+        else:
+            actions_now.append("周线空头：不做新开多，等开始转多或周线转中性")
     if adx_r is not None and not adx_r.trending:
         actions_wait.append("ADX震荡：少追突破，优先回踩入场区限价")
     if h1_r is not None:
@@ -3187,6 +3211,8 @@ def build_trade_sop(
         weekly_label=getattr(weekly, "label", "—") if weekly else "—",
         weekly_summary=getattr(weekly, "summary", "") if weekly else "",
         weekly_allow_long=weekly_allow,
+        weekly_turning_bullish=weekly_turning,
+        weekly_turning_note=weekly_turn_note,
         adx_label=getattr(adx_r, "label", "—") if adx_r else "—",
         adx_value=adx_val,
         adx_summary=getattr(adx_r, "summary", "") if adx_r else "",

@@ -34,7 +34,7 @@ def render_compare(period: str, interval: str, period_label: str) -> None:
 
     mobile_plotly(
         compare_chart(cmp_df, title=f"相对走势 · {period_label}"),
-        use_container_width=True,
+        width="stretch",
     )
 
     rows = []
@@ -52,4 +52,4 @@ def render_compare(period: str, interval: str, period_label: str) -> None:
         )
     if rows:
         table = pd.DataFrame(rows).sort_values("区间涨跌%", ascending=False)
-        st.dataframe(table, use_container_width=True, hide_index=True)
+        st.dataframe(table, width="stretch", hide_index=True)

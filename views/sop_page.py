@@ -107,7 +107,7 @@ def render_sop(
     with c5:
         st.write("")
         st.write("")
-        if st.button("→ 我已买入", use_container_width=True, key="sop_to_hold"):
+        if st.button("→ 我已买入", width="stretch", key="sop_to_hold"):
             st.session_state._goto_hold = True
             st.rerun()
 
@@ -408,7 +408,7 @@ def render_sop(
                 }
                 for c in sop.checklist
             ]
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
         else:
             st.caption("无清单")
 

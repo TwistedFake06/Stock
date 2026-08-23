@@ -6,7 +6,6 @@ from __future__ import annotations
 from typing import Any
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 PLOTLY_CONFIG = {
     "responsive": True,
@@ -388,8 +387,9 @@ div[data-testid="stProgress"] > div {
 
 def inject_ios_safari_support() -> None:
     """Inject viewport/meta tweaks for iPhone Safari rendering behavior."""
-    components.html(
-        """
+    # Streamlit 1.60+: components.v1.html is deprecated. Inline JS belongs in
+    # st.html (not st.iframe, which only takes a URL/Path).
+    html_body = """
 <script>
 (() => {
   const ensureMeta = (name, content, key = 'name') => {
@@ -415,10 +415,11 @@ def inject_ios_safari_support() -> None:
   window.addEventListener('resize', setVh, { passive: true });
 })();
 </script>
-        """,
-        height=0,
-        width=0,
-    )
+"""
+    try:
+        st.html(html_body, unsafe_allow_javascript=True, width="stretch")
+    except TypeError:
+        st.html(html_body)
 
 
 def apply_dark_plotly(fig: Any) -> Any:
@@ -445,7 +446,9 @@ def apply_dark_plotly(fig: Any) -> Any:
 def plotly_chart(fig: Any, **kwargs: Any) -> None:
     """Mobile-safe + dark plotly chart wrapper."""
     fig = apply_dark_plotly(fig)
-    kwargs.setdefault("use_container_width", True)
+    ucw = kwargs.pop("use_container_width", None)
+    if "width" not in kwargs:
+        kwargs["width"] = "content" if ucw is False else "stretch"
     kwargs.setdefault("config", PLOTLY_CONFIG)
     st.plotly_chart(fig, **kwargs)
 
