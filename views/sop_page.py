@@ -9,9 +9,9 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from stock_service import cache_bucket, cached_info
+from stock_service import cache_bucket, cached_info, fetch_history
 from trade_sop import build_trade_sop, format_win_rate
-from views.common import render_session_quote_card
+from views.common import render_data_status, render_session_quote_card
 from views.journal_panel import render_journal_panel
 
 
@@ -152,7 +152,9 @@ def render_sop(
 
     name = sop.name or symbol
     last = sop.last_price
-    st.markdown(f"### {name} · `{sop.symbol}` · 现价 **{_fmt(last)}**")
+    st.markdown(f"### {name} · `{sop.symbol}` · K线基准价 **{_fmt(last)}**")
+    render_session_quote_card(sop.symbol, cached_info(sop.symbol, cache_bucket(5)))
+    render_data_status(fetch_history(sop.symbol, period=period, interval=interval), interval=interval)
 
     mode_lab = getattr(sop, "mode_label", "") or "A 防守版"
     if getattr(sop, "mode_forced", False):
@@ -191,6 +193,7 @@ def render_sop(
     one = getattr(sop, "one_liner_reason", "") or ""
     if one:
         st.info(f"**主因：** {one}")
+    st.caption("执行顺序：先确认资料状态 → 判断可否新增风险 → 挂单 E → 预设止蚀 S → 到目标分批处理。")
     if getattr(sop, "earnings_soon", False) or getattr(sop, "earnings_note", ""):
         ed = getattr(sop, "earnings_days_left", None)
         en = getattr(sop, "earnings_note", "") or "临近财报窗口"

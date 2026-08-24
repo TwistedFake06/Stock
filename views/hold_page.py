@@ -9,7 +9,9 @@ import streamlit as st
 
 from position_coach import advise_dual_hold, build_follow_levels
 from stock_service import cache_bucket, cached_info, fetch_history, normalize_symbol
+from market_session import fetch_extended_quote
 from trade_sop import DEFAULT_NOTIONAL_HKD, build_trade_sop
+from views.common import render_data_status
 from views.journal_panel import render_journal_panel
 
 
@@ -302,14 +304,19 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
 
     sym = normalize_symbol(symbol)
     last = None
+    last_label = "现价（参考）"
     name = sym
+    confirmed_history = fetch_history(sym, period=period, interval=interval)
     try:
         info = cached_info(sym, cache_bucket(5))
-        last = (
+        regular_last = (
             info.get("currentPrice")
             or info.get("regularMarketPrice")
             or info.get("last_price")
         )
+        quote = fetch_extended_quote(sym, info)
+        last = quote.live_price or regular_last
+        last_label = f"现价（{quote.live_label}）"
         name = info.get("shortName") or info.get("longName") or sym
         if last is None:
             hist = fetch_history(sym, period="5d", interval="1d")
@@ -319,11 +326,13 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
         pass
 
     if last is not None:
-        st.metric("现价（参考）", f"{float(last):.4f}")
+        st.metric(last_label, f"{float(last):.4f}")
     else:
         st.warning("暂时拉不到现价，仍可填买入价；生成建议时会再试一次。")
 
     st.markdown("---")
+    render_data_status(confirmed_history, interval=interval)
+    st.caption("持仓的硬止蚀以入场日计划为底；盘前/盘后价只用于提前发现跳空风险，不能据此放宽止蚀。")
     c1, c2, c3 = st.columns(3)
     with c1:
         buy_px = st.number_input(
@@ -373,6 +382,7 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
 
     entry_lv: HoldLevels | None = None
     live_lv: HoldLevels | None = None
+    sop_live: Any | None = None
     structure_bits: list[str] = []
     load_err: str | None = None
 
@@ -406,7 +416,7 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
                         primary_horizon=ph,
                     )
                     live_lv = extract_hold_levels(sop_live, prefer=prefer, tag="live")
-                    if sop_live.last_price is not None:
+                    if last is None and sop_live.last_price is not None:
                         last = float(sop_live.last_price)
                     name = sop_live.name or name
                     structure_bits = list(live_lv.structure_bits or [])
@@ -436,26 +446,12 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
         buy_f = float(buy_px)
         last_f = float(last)
 
-        # Fallbacks if plans failed
-        if live_lv is None:
-            live_lv = HoldLevels(
-                tag="live",
-                as_of="即时",
-                close=last_f,
-                entry_plan=buy_f,
-                zone_lo=None,
-                zone_hi=None,
-                stop=buy_f * 0.97,
-                t1=buy_f * 1.05,
-                t2=buy_f * 1.10,
-                resistance=None,
-                support=None,
-                max_days=10,
-            )
-        if live_lv.stop is None:
-            live_lv.stop = buy_f * 0.97
-        if live_lv.t1 is None:
-            live_lv.t1 = buy_f * 1.05
+        # Never turn a data failure into arbitrary percentage stop/target levels.
+        if live_lv is None or live_lv.stop is None or live_lv.t1 is None:
+            st.error("无法取得有效的即时止蚀与目标，已停止生成执行建议。请稍后重试，不要用固定百分比代替结构止蚀。")
+            if load_err:
+                st.caption(f"资料原因：{load_err}")
+            return
 
         t1_use = (
             entry_lv.t1 if entry_lv and entry_lv.t1 is not None else live_lv.t1
@@ -524,6 +520,26 @@ def render_hold_page(symbol: str, period: str = "1y", interval: str = "1d") -> N
         else:
             st.success(f"## {advice.action}")
         st.markdown(f"**{advice.headline}**")
+
+        if sop_live is not None:
+            st.markdown("#### 加仓风险覆核")
+            add_c1, add_c2, add_c3 = st.columns(3)
+            add_c1.metric("即时 SOP", sop_live.enter_ok)
+            add_c2.metric("允许新增风险", f"{sop_live.risk_units:g}R")
+            add_c3.metric(
+                "近期财报",
+                (
+                    f"{sop_live.earnings_days_left} 天"
+                    if sop_live.earnings_soon and sop_live.earnings_days_left is not None
+                    else "无近期期限"
+                ),
+            )
+            if sop_live.risk_units <= 0:
+                st.warning("即时结构不支持新增风险：禁止加仓或摊平；原持仓仍只跟下方硬止蚀与减仓价。")
+            elif sop_live.earnings_soon:
+                st.warning("财报临近：即使结构允许，也不建议在财报前扩大仓位；优先管理既有风险。")
+            else:
+                st.caption("此栏只决定能否新增风险，不会降低或放宽入场日硬止蚀。")
 
         # 价位尺：现在立刻做 ≠ 剩仓目标（避免「1026=减半」的混淆）
         st.markdown(f"**现在立刻做：** {follow.now_do}")

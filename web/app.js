@@ -11,6 +11,7 @@ const ui = {
   err: document.getElementById("errorText"),
   status: document.getElementById("statusText"),
   company: document.getElementById("companyText"),
+  dataStatus: document.getElementById("dataStatusText"),
   vPrice: document.getElementById("vPrice"),
   vChg: document.getElementById("vChg"),
   vHigh: document.getElementById("vHigh"),
@@ -69,6 +70,12 @@ function fmt(v, d = 2) {
     maximumFractionDigits: d,
     minimumFractionDigits: d,
   });
+}
+
+function formatCacheTime(raw) {
+  const parsed = raw ? new Date(raw) : null;
+  if (!parsed || Number.isNaN(parsed.getTime())) return "unknown";
+  return parsed.toLocaleString();
 }
 
 function sma(series, n) {
@@ -529,6 +536,10 @@ function updateMetrics(rows, source) {
 
   ui.status.textContent = `Loaded ${rows.length} daily bars`;
   ui.company.textContent = `${source} · last date ${last.date}`;
+  const cachedAt = state.marketCache?.updatedAt;
+  ui.dataStatus.textContent = cachedAt
+    ? `Decision basis: confirmed daily close ${last.date} · Pages cache updated ${formatCacheTime(cachedAt)}. Not a live, pre-market, or after-hours quote.`
+    : `Decision basis: daily close ${last.date}. This Lite page does not provide live, pre-market, or after-hours quotes.`;
   ui.vPrice.textContent = fmt(last.close);
   ui.vChg.textContent = `${chg >= 0 ? "+" : ""}${fmt(chg)} (${chgPct >= 0 ? "+" : ""}${fmt(chgPct)}%)`;
   ui.vChg.className = `value ${chg >= 0 ? "up" : "down"}`;

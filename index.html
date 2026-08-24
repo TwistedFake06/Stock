@@ -8,12 +8,12 @@
     />
     <meta name="theme-color" content="#f8f7f4" />
     <title>Stock Analyzer Lite</title>
-    <link rel="stylesheet" href="web/styles.css?v=20260801-2" />
+    <link rel="stylesheet" href="web/styles.css?v=20260824-1" />
     <script
       src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"
       defer
     ></script>
-    <script src="web/app.js?v=20260801-2" defer></script>
+    <script src="web/app.js?v=20260824-1" defer></script>
   </head>
   <body>
     <div class="app">
@@ -43,6 +43,7 @@
         </div>
         <p id="statusText" class="note">Ready.</p>
         <p id="companyText" class="note"></p>
+        <p id="dataStatusText" class="note"></p>
         <p id="errorText" class="err"></p>
       </header>
 
@@ -94,8 +95,8 @@
           </div>
           <pre id="planBox" class="plan">No data loaded.</pre>
           <p class="note">
-            Model: static client-side technical scoring for quick directional
-            view.
+            Static Lite uses cached daily bars and a simplified score. It is
+            not a live quote or an executable trading signal.
           </p>
         </article>
       </section>

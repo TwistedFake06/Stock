@@ -34,6 +34,7 @@ __all__ = [
     "html_plain",
     "load_watchlist",
     "render_bias_banner",
+    "render_data_status",
     "save_watchlist",
 ]
 
@@ -203,6 +204,35 @@ def get_price_fields(info: dict) -> dict:
         "post_change_pct": info.get("postMarketChangePercent"),
         "regular_price": info.get("regularMarketPrice"),
     }
+
+
+def render_data_status(history: pd.DataFrame | None, *, interval: str = "1d") -> None:
+    """Show the timestamp and session boundary behind a trading decision."""
+    last_bar = "—"
+    confirmed = history
+    try:
+        from market_session import us_session_clock
+
+        clock = us_session_clock()
+        if (
+            interval == "1d"
+            and confirmed is not None
+            and len(confirmed) >= 2
+            and clock.session == "rth"
+        ):
+            confirmed = confirmed.iloc[:-1]
+        session = f"{clock.label_zh} · {clock.et_now}"
+    except Exception:
+        session = "交易时段无法确认"
+    if confirmed is not None and not confirmed.empty and "Date" in confirmed.columns:
+        try:
+            last_bar = pd.Timestamp(confirmed["Date"].iloc[-1]).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    st.caption(
+        f"数据基准：最后确认 {interval} K线 {last_bar} · {session}。"
+        "盘前/盘后报价只作跳空与流动性风险参考，不改写已确认指标。"
+    )
 
 
 def render_session_quote_card(symbol: str, info: dict | None = None) -> None:

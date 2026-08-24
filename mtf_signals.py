@@ -21,6 +21,28 @@ from indicators import enrich
 from stock_service import fetch_history, normalize_symbol
 
 
+def _last_week_is_confirmed(df: pd.DataFrame) -> bool:
+    """Whether the final Yahoo weekly bar is a completed, prior-week bar."""
+    try:
+        from market_session import us_session_clock
+
+        clock = us_session_clock()
+        if df.empty or "Date" not in df.columns:
+            return False
+        last_bar = pd.Timestamp(df["Date"].iloc[-1]).tz_localize(None).normalize()
+        now_et = pd.Timestamp.now(tz="America/New_York")
+        week_start = now_et.tz_localize(None).normalize() - pd.Timedelta(days=clock.weekday)
+        # A bar from a prior week is already final, even early Monday before Yahoo
+        # starts a new weekly bar. The current week's bar finalizes after Friday RTH.
+        if last_bar < week_start:
+            return True
+        return clock.is_weekend or (
+            clock.weekday == 4 and clock.session in ("after_hours", "overnight")
+        )
+    except Exception:
+        return False
+
+
 @dataclass
 class WeeklyFilterReport:
     label: str = "—"  # 周线多头 | 周线中性 | 周线空头
@@ -122,6 +144,9 @@ def analyze_weekly_filter(symbol: str) -> WeeklyFilterReport:
     周线空头 → 默认不鼓励做多；若开始转多，由上层最多试仓。
     """
     df = fetch_history(normalize_symbol(symbol), period="3y", interval="1wk")
+    if len(df) >= 2 and not _last_week_is_confirmed(df):
+        # Yahoo's final weekly row changes until Friday's close.
+        df = df.iloc[:-1].copy()
     if df.empty or len(df) < 25 or "Close" not in df.columns:
         return WeeklyFilterReport(
             summary="周线数据不足，跳过周线过滤。",

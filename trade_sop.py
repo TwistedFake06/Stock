@@ -2013,7 +2013,18 @@ def build_trade_sop(
             as_of=as_of_str,
         )
 
-    df = enrich(hist)
+    # During RTH the last daily bar is still forming. Keep every structural
+    # indicator on the last confirmed close; the UI presents live quotes separately.
+    analysis_hist = hist
+    if as_of_d is None and interval == "1d" and len(analysis_hist) >= 2:
+        try:
+            from market_session import us_session_clock
+
+            if us_session_clock().session == "rth":
+                analysis_hist = analysis_hist.iloc[:-1].copy()
+        except Exception:
+            pass
+    df = enrich(analysis_hist)
     last = float(df["Close"].iloc[-1])
     bias = analyze_bias(df)
     entry = analyze_entry(df)
@@ -2091,7 +2102,7 @@ def build_trade_sop(
 
     try:
         cal = cached_calendar(sym, cache_bucket(30))
-        events = analyze_events(info_use, cal)
+        events = analyze_events(info_use, cal, reference_date=as_of_d)
     except Exception:
         events = None
 

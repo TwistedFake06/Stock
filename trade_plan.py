@@ -187,8 +187,14 @@ def _to_date(val: Any) -> date | None:
     return None
 
 
-def analyze_events(info: dict[str, Any], calendar: dict[str, Any] | None = None) -> EventReport:
-    today = date.today()
+def analyze_events(
+    info: dict[str, Any],
+    calendar: dict[str, Any] | None = None,
+    *,
+    reference_date: date | None = None,
+) -> EventReport:
+    """Return event risk relative to today or a historical reconstruction date."""
+    today = reference_date or date.today()
     items: list[EventItem] = []
     calendar = calendar or {}
 

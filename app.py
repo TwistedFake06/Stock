@@ -45,6 +45,7 @@ try:
     from views.extra_page import render_extra
     from views.scan_page import render_scan
     from views.hold_page import render_hold_page
+    from views.options_page import render_options
     from views.sop_page import render_sop
     from views.technical_page import render_technical
     from views.validation_page import render_strategy_validation
@@ -161,6 +162,7 @@ PAGE_MORE = [
     "技术分析",
     "多股对比",
     "自选股",
+    "期权价差",
 ]
 PAGE_OPTIONS = PAGE_MAIN + PAGE_MORE  # 兼容旧 session 值
 
@@ -371,3 +373,5 @@ elif page == "多股对比":
     render_compare(period, interval, period_label)
 elif page == "自选股":
     render_watchlist(period, interval)
+elif page == "期权价差":
+    render_options(symbol)
