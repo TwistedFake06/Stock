@@ -501,6 +501,13 @@ class TestTradeSOPHelpers(unittest.TestCase):
         )
         self.assertIn(ok, ("观望", "回避"))
 
+    def test_rr_below_point_eight_gets_stronger_penalty(self):
+        common = ("观望", 50, "中性", 0, 50, None)
+        _, severe_score, _ = _enter_decision(*common, 0.7, "中")
+        _, mild_score, _ = _enter_decision(*common, 0.9, "中")
+
+        self.assertLess(severe_score, mild_score)
+
     def test_enter_decision_regime_blocks_full_entry(self):
         ok, score, side = _enter_decision(
             "较佳入场",

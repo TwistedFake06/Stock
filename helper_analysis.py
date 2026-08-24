@@ -315,7 +315,7 @@ def analyze_helpers(
 
     if bias:
         playbook.append(
-            f"技术多空参考：{bias.bias}（{bias.score:+.0f}分，置信度{bias.confidence}），"
+            f"技术多空参考：{bias.bias}（规则分{bias.score:+.0f}，信号一致度{bias.confidence}），"
             "与入场评级交叉验证。"
         )
 

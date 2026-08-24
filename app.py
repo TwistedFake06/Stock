@@ -43,11 +43,11 @@ try:
     from views.dashboard import render_dashboard
     from views.entry_page import render_entry
     from views.extra_page import render_extra
-    from views.options_page import render_options
     from views.scan_page import render_scan
     from views.hold_page import render_hold_page
     from views.sop_page import render_sop
     from views.technical_page import render_technical
+    from views.validation_page import render_strategy_validation
     from views.watchlist_page import render_watchlist
 except Exception as exc:
     # Friendly page when deps/modules fail (e.g. ran without venv / missing plotly)
@@ -145,12 +145,12 @@ def _on_symbol_box_change() -> None:
         st.session_state.symbol = ns
 
 
-# 主流程（精简）：日常只用前 3 项 + 期权；其余收进「更多」
+# 主流程（精简）：日常计划、持仓、扫描与规则验证；其余收进「更多」
 PAGE_MAIN = [
     "投资SOP",
     "我已买入",
     "Watchlist扫描",
-    "期权价差",
+    "策略验证",
     "更多…",
 ]
 PAGE_MORE = [
@@ -355,8 +355,8 @@ elif page == "我已买入":
     render_hold_page(symbol, period=period, interval=interval)
 elif page == "Watchlist扫描":
     render_scan(period, interval, period_label)
-elif page == "期权价差":
-    render_options(symbol)
+elif page == "策略验证":
+    render_strategy_validation(symbol)
 elif page == "行情看板":
     render_dashboard(symbol, period, interval, period_label, interval_label)
 elif page == "多空分析":

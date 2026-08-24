@@ -10,11 +10,14 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
+import pandas as pd
+
 from analysis import (
     BIAS_MILD_THRESHOLD,
     BIAS_STRONG_THRESHOLD,
     _bias_from_score,
 )
+from indicators import add_rsi
 from options_greeks import calc_spread_greeks
 from options_payoff import payoff_per_contract, payoff_per_share
 from options_position import calc_options_position
@@ -203,6 +206,17 @@ class TestBiasThresholds(unittest.TestCase):
         self.assertEqual(_bias_from_score(0), "中性")
         self.assertEqual(_bias_from_score(-18), "看空")
         self.assertEqual(_bias_from_score(-45), "强烈看空")
+
+
+class TestRSIEdgeCases(unittest.TestCase):
+    def test_monotonic_and_flat_series(self):
+        rising = add_rsi(pd.DataFrame({"Close": list(range(1, 31))}))
+        falling = add_rsi(pd.DataFrame({"Close": list(range(30, 0, -1))}))
+        flat = add_rsi(pd.DataFrame({"Close": [10.0] * 30}))
+
+        self.assertEqual(float(rising["RSI"].iloc[-1]), 100.0)
+        self.assertEqual(float(falling["RSI"].iloc[-1]), 0.0)
+        self.assertEqual(float(flat["RSI"].iloc[-1]), 50.0)
 
 
 class TestOptionsPosition(unittest.TestCase):

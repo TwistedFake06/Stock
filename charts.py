@@ -355,7 +355,7 @@ def bias_gauge(score: float, bias: str) -> go.Figure:
             mode="gauge+number+delta",
             value=score,
             number={"suffix": " 分", "font": {"size": 36}},
-            title={"text": f"多空得分 · {bias}", "font": {"size": 16}},
+            title={"text": f"多空规则分 · {bias}", "font": {"size": 16}},
             gauge={
                 "axis": {"range": [-100, 100], "tickwidth": 1},
                 "bar": {"color": color, "thickness": 0.35},

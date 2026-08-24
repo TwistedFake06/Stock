@@ -56,7 +56,7 @@ def render_bias_banner(report: BiasReport, compact: bool = False) -> None:
             <div class="bias-card">
               <p class="bias-title" style="color:{color};">{emoji} {bias_safe}
                 <span style="font-size:1rem;color:#90a4ae;font-weight:500;">
-                  · 得分 {report.score:+.0f} · 置信度 {conf_safe}
+                  · 规则分 {report.score:+.0f} · 信号一致度 {conf_safe}
                 </span>
               </p>
               <p class="bias-sub">{summary}</p>
@@ -79,7 +79,7 @@ def render_bias_banner(report: BiasReport, compact: bool = False) -> None:
     mobile_plotly(bias_gauge(report.score, report.bias))
     st.caption(
         f"多头 **{report.bull_count}** · 空头 **{report.bear_count}** · "
-        f"中性 **{report.neutral_count}** · 置信度 **{report.confidence}**"
+        f"中性 **{report.neutral_count}** · 信号一致度 **{report.confidence}**"
     )
     snap = report.snapshot or {}
     metric_grid(

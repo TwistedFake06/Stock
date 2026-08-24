@@ -1794,10 +1794,10 @@ def _enter_decision(
             s += 6
         elif rr >= 1.05:
             s += 2
-        elif rr < 1.0:
-            s -= 14  # 赔率不足，强烈减分
         elif rr < 0.8:
             s -= 18
+        elif rr < 1.0:
+            s -= 14  # 赔率不足，强烈减分
 
     if risk_level in ("高", "极高"):
         s -= 8
@@ -2577,7 +2577,7 @@ def build_trade_sop(
             "status": "pass"
             if bias.score >= 18
             else ("warn" if abs(bias.score) < 18 else "fail"),
-            "detail": f"{bias.bias}（{bias.score:+.0f}）置信度 {bias.confidence}",
+            "detail": f"{bias.bias}（规则分 {bias.score:+.0f}）信号一致度 {bias.confidence}",
         }
     )
     checklist.append(

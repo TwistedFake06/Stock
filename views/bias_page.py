@@ -68,4 +68,4 @@ def render_bias_page(
         m1, m2, m3 = st.columns(3)
         m1.metric("区间收益率", fmt_pct(rets.get("total_return_pct")))
         m2.metric("年化波动率(估)", fmt_pct(rets.get("volatility_pct")))
-        m3.metric("多空得分", f"{report.score:+.1f}", report.bias)
+        m3.metric("多空规则分", f"{report.score:+.1f}", report.bias)

@@ -97,7 +97,7 @@ def render_watchlist(period: str, interval: str) -> None:
         display = display.loc[order]
 
     st.dataframe(display, width="stretch", hide_index=True)
-    st.caption("自选列表按多空得分从高到低排序（看多在前）。")
+    st.caption("自选列表按多空规则分从高到低排序（看多在前）。")
 
     st.subheader("操作")
     for s in list(st.session_state.watchlist):

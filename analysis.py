@@ -443,19 +443,19 @@ def analyze_bias(df: pd.DataFrame) -> BiasReport:
         summary = (
             f"综合 **{bias}**（得分 {score:+.0f}）。"
             f"多头信号 {bull_count} 项，空头 {bear_count} 项。"
-            f"置信度：{conf}。"
+            f"信号一致度：{conf}。"
         )
     elif bias in ("看空", "强烈看空"):
         summary = (
             f"综合 **{bias}**（得分 {score:+.0f}）。"
             f"空头信号 {bear_count} 项，多头 {bull_count} 项。"
-            f"置信度：{conf}。"
+            f"信号一致度：{conf}。"
         )
     else:
         summary = (
             f"综合 **中性**（得分 {score:+.0f}），多空力量接近。"
             f"多头 {bull_count} / 空头 {bear_count} / 中性 {neutral_count}。"
-            f"置信度：{conf}。"
+            f"信号一致度：{conf}。"
         )
 
     snapshot = {

@@ -43,8 +43,13 @@ def add_rsi(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
     loss = -delta.clip(upper=0)
     avg_gain = gain.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
-    rs = avg_gain / avg_loss.replace(0, pd.NA)
-    out["RSI"] = 100 - (100 / (1 + rs))
+    rsi = pd.Series(float("nan"), index=out.index, dtype=float)
+    normal = avg_loss > 0
+    rs = avg_gain[normal] / avg_loss[normal]
+    rsi.loc[normal] = 100 - (100 / (1 + rs))
+    rsi.loc[(avg_loss == 0) & (avg_gain > 0)] = 100.0
+    rsi.loc[(avg_loss == 0) & (avg_gain == 0)] = 50.0
+    out["RSI"] = rsi
     return out
 
 
