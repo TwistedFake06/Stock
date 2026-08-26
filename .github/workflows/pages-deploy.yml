@@ -64,3 +64,41 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Check deployed site health
+        id: health
+        shell: bash
+        env:
+          DEPLOYED_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          for attempt in {1..12}; do
+            if curl --fail --silent --show-error --location --max-time 15 "$DEPLOYED_URL" > /dev/null; then
+              echo "status=healthy" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Health check attempt $attempt/12 failed; retrying..."
+            sleep 10
+          done
+          echo "status=unhealthy" >> "$GITHUB_OUTPUT"
+          exit 1
+
+      - name: Notify Telegram of deployment health
+        if: ${{ always() }}
+        shell: bash
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DEPLOYED_URL: ${{ steps.deployment.outputs.page_url }}
+          HEALTH_STATUS: ${{ steps.health.outputs.status }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram notification skipped: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is not configured."
+            exit 0
+          fi
+
+          status="${HEALTH_STATUS:-unhealthy}"
+          message="Stock Pages deployment ${status}: ${DEPLOYED_URL}"
+          curl --fail --silent --show-error --request POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --form "chat_id=${TELEGRAM_CHAT_ID}" \
+            --form "text=${message}"

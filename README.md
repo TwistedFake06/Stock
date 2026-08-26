@@ -158,6 +158,19 @@ http(s)://你的服务器域名或IP:8501
 - 该静态版使用浏览器侧指标计算（SMA/RSI/MACD/多空评分），用于快速参考。
 - 行情数据来自 Yahoo Finance：GitHub Actions 先拉取并生成同域缓存 `web/data/quotes.json`（同时写入 `quotes.json` 兼容路径），前端优先读缓存，绕过浏览器 CORS 限制。
 
+### Pages 部署健康检查通知
+
+`pages-deploy.yml` 在 GitHub Pages 部署后会最多重试 2 分钟检查公开网址是否可用，并透过 Telegram 回报 `healthy` 或 `unhealthy`。若健康检查失败，部署工作也会标示为失败。
+
+在 GitHub repository 的 **Settings → Secrets and variables → Actions** 新增以下 repository secrets：
+
+```text
+TELEGRAM_BOT_TOKEN=你的bot token
+TELEGRAM_CHAT_ID=你的chat id
+```
+
+若未设置这两个 secrets，部署及健康检查仍会执行，但 Telegram 通知会略过。
+
 ## 部署到 Streamlit Community Cloud
 
 ### Streamlit Cloud 就绪检查（推荐先确认）
