@@ -1,5 +1,5 @@
 """
-Auto-scan watchlist and notify when short-term entry is OK.
+Auto-scan watchlist and notify when a swing or opening-hours setup is ready.
 
 Default: every 5 minutes loop, or one-shot with --once.
 
@@ -14,8 +14,11 @@ Usage:
   # loop every 5 minutes (keep PC awake)
   .venv\\Scripts\\python.exe scripts\\watchlist_alert.py --interval 300
 
-  # only alert 可以入場 (stricter)
+    # only alert 可以入場 (stricter swing mode)
   .venv\\Scripts\\python.exe scripts\\watchlist_alert.py --min enter
+
+    # opening-hours 5-minute setup; only scans 09:45–12:00 ET
+    .venv\\Scripts\\python.exe scripts\\watchlist_alert.py --mode intraday --interval 300
 
 Alert state is saved so the same symbol won't spam every 5 minutes
 until it leaves "enterable" and becomes enterable again (or cooldown expires).
@@ -55,7 +58,9 @@ except Exception:
             if k and v and not (os.environ.get(k) or "").strip():
                 os.environ[k] = v
 
-from stock_service import DEFAULT_WATCHLIST, normalize_symbol
+from intraday_signals import IntradaySetup, analyze_opening_range_setup
+from market_session import us_session_clock
+from stock_service import DEFAULT_WATCHLIST, fetch_history_extended, normalize_symbol
 from trade_sop import build_trade_sop
 
 DEFAULT_LIST = ROOT / "watchlist_scan.txt"
@@ -140,6 +145,25 @@ def _format_alert(sop) -> str:
     lines.append(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append("（模型辅助，非投资建议）")
     return "\n".join(str(x) for x in lines)
+
+
+def _format_intraday_alert(setup: IntradaySetup) -> str:
+    """Keep the iPhone notification short enough to act on without opening the app."""
+    def price(value: float | None) -> str:
+        return f"{value:.2f}" if value is not None else "—"
+
+    lines = [
+        f"📣 开市超短 · {setup.symbol}",
+        f"可做 · 分数 {setup.score}/100 · 现价 {price(setup.last_price)}",
+        f"入场 E: {price(setup.entry)}  止蚀 S: {price(setup.stop)}",
+        f"减仓 T1 (1R): {price(setup.target_1)}  T2 (2R): {price(setup.target_2)}",
+    ]
+    if setup.relative_volume is not None:
+        lines.append(f"5分钟量比: {setup.relative_volume:.1f}x")
+    if setup.divergence_warning:
+        lines.append("⚠️ MACD 顶背离：不加仓，按计划减仓/止蚀")
+    lines.append("限价等 E；到 T1 减仓，止蚀不可下移。非投资建议。")
+    return "\n".join(lines)
 
 
 def send_telegram(text: str) -> tuple[bool, str]:
@@ -237,6 +261,84 @@ def clear_if_not_enterable(state: dict[str, Any], symbol: str) -> None:
         alerts[symbol]["verdict"] = "out"
 
 
+def _in_intraday_alert_window() -> bool:
+    """Allow automatic opening setups only after the first 15 minutes, before noon ET."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(ZoneInfo("America/New_York"))
+        return now.weekday() < 5 and (9, 45) <= (now.hour, now.minute) < (12, 0)
+    except Exception:
+        return False
+
+
+def run_intraday_scan(
+    *,
+    symbols: list[str],
+    cooldown_sec: int,
+    repeat: bool,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """Notify only fresh, valid 5-minute opening-range plans during the live window."""
+    clock = us_session_clock()
+    if not _in_intraday_alert_window():
+        print(f"[{clock.et_now}] 开市超短通知待机（只在 09:45–12:00 ET 扫描）")
+        return {"hits": [], "errors": []}
+
+    state = _load_state()
+    hits: list[str] = []
+    errors: list[str] = []
+    print(f"[{clock.et_now}] 超短扫描 {len(symbols)} 只 · 5分钟 RTH")
+    for sym in symbols:
+        state_key = f"intraday:{sym}"
+        try:
+            history = fetch_history_extended(sym, period="5d", interval="5m")
+            setup = analyze_opening_range_setup(sym, history)
+            print(f"  {sym:8} {setup.verdict:6} score={setup.score:3} last={setup.last_price}")
+            if setup.verdict != "可做":
+                clear_if_not_enterable(state, state_key)
+                continue
+
+            verdict_key = "intraday-ready"
+            if not repeat:
+                previous = (state.get("alerts") or {}).get(state_key, {})
+                if previous.get("verdict") == verdict_key:
+                    print(f"    (已通知过，跳过) {sym}")
+                    continue
+            elif not should_alert(state, state_key, verdict_key, cooldown_sec):
+                print(f"    (冷却中，跳过) {sym}")
+                continue
+
+            text = _format_intraday_alert(setup)
+            payload = {
+                "symbol": sym,
+                "strategy": "opening_range_5m",
+                "status": setup.verdict,
+                "score": setup.score,
+                "last": setup.last_price,
+                "entry": setup.entry,
+                "stop": setup.stop,
+                "target_1": setup.target_1,
+                "target_2": setup.target_2,
+                "relative_volume": setup.relative_volume,
+                "divergence_warning": setup.divergence_warning,
+            }
+            if dry_run:
+                print("    [dry-run] 不发送:\n" + text)
+            else:
+                for log in notify(text, payload):
+                    print(f"    notify: {log}")
+            mark_alerted(state, state_key, verdict_key)
+            hits.append(sym)
+        except Exception as exc:
+            error = f"{sym}: {type(exc).__name__}: {exc}"
+            errors.append(error)
+            print(f"  ERROR {error}")
+    _save_state(state)
+    print(f"完成 · 新通知 {len(hits)} · 错误 {len(errors)}")
+    return {"hits": hits, "errors": errors}
+
+
 def run_scan(
     *,
     symbols: list[str],
@@ -322,6 +424,12 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Watchlist auto-scan + Telegram/webhook alert")
     p.add_argument("--file", "-f", default=str(DEFAULT_LIST), help="symbol list file")
     p.add_argument("--period", default="1y")
+    p.add_argument(
+        "--mode",
+        choices=["swing", "intraday"],
+        default="swing",
+        help="swing=existing SOP scan; intraday=5-minute opening-range scan (09:45–12:00 ET)",
+    )
     p.add_argument("--capital-hkd", type=float, default=50_000.0)
     p.add_argument("--risk-pct", type=float, default=1.0)
     p.add_argument("--hkd-per-usd", type=float, default=7.8)
@@ -374,6 +482,14 @@ def main() -> None:
         )
 
     def once() -> None:
+        if args.mode == "intraday":
+            run_intraday_scan(
+                symbols=symbols,
+                cooldown_sec=int(args.cooldown) if args.repeat else 0,
+                repeat=bool(args.repeat),
+                dry_run=bool(args.dry_run),
+            )
+            return
         run_scan(
             symbols=symbols,
             period=args.period,
@@ -390,7 +506,7 @@ def main() -> None:
         return
 
     interval = max(60, int(args.interval))
-    print(f"循环模式: 每 {interval}s 扫描一次（Ctrl+C 停止）")
+    print(f"循环模式: {args.mode} · 每 {interval}s 扫描一次（Ctrl+C 停止）")
     while True:
         try:
             once()

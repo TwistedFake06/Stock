@@ -233,6 +233,33 @@ streamlit run app.py
 
 浏览器会自动打开（默认 `http://localhost:8501`）。
 
+## iPhone 自动通知（Telegram）
+
+`run_alert.bat` 会每 5 分钟扫描 App Watchlist，并仅在美股 `09:45–12:00 ET`
+发现新的「开市超短」可做 setup 时推送 Telegram。通知会包含入场 `E`、止蚀 `S`、
+分批减仓 `T1/T2`；同一只股票持续符合条件时不会重复洗版。
+
+1. 在 Telegram 找 `@BotFather`，执行 `/newbot`，取得 bot token。
+2. 向新 bot 发送任意一条消息，再在浏览器打开
+  `https://api.telegram.org/bot<TOKEN>/getUpdates`，从返回资料复制 `chat.id`。
+3. 复制 `.env.example` 为 `.env`，填写：
+
+```text
+TELEGRAM_BOT_TOKEN=你的token
+TELEGRAM_CHAT_ID=你的chat_id
+```
+
+4. 在 iPhone 安装 Telegram、登入同一帐号，并在该 bot 对话中允许通知。
+5. 双击 `run_alert.bat`；Windows 必须保持开机、联网且不休眠。先以
+  `\.venv\Scripts\python.exe scripts\watchlist_alert.py --mode intraday --once --dry-run`
+  检查资料和规则，不会发送通知。
+
+若仍想运行原来的日线 / 0–2 周 SOP 通知，使用：
+
+```text
+.venv\Scripts\python.exe scripts\watchlist_alert.py --mode swing --interval 300 --min try
+```
+
 ## 代码格式说明
 
 | 市场     | 示例输入            | Yahoo 代码                |

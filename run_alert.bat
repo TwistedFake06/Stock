@@ -18,10 +18,10 @@ if exist "%~dp0.env" (
 )
 
 echo.
-echo Watchlist auto-alert every 5 minutes
+echo Opening-hours 5-minute auto-alert every 5 minutes (09:45-12:00 ET)
 echo Telegram needs TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env
 echo Ctrl+C to stop
 echo.
 
-"%VENV_PY%" "%~dp0scripts\watchlist_alert.py" --interval 300 --min try
+"%VENV_PY%" "%~dp0scripts\watchlist_alert.py" --mode intraday --interval 300
 pause

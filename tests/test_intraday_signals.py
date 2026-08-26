@@ -7,6 +7,7 @@ import unittest
 import pandas as pd
 
 from intraday_signals import analyze_opening_range_setup
+from scripts.watchlist_alert import _format_intraday_alert
 
 
 def _bars(*, final_close: float = 100.8, final_volume: float = 4_000) -> pd.DataFrame:
@@ -43,6 +44,12 @@ class TestOpeningRangeSetup(unittest.TestCase):
         setup = analyze_opening_range_setup("NVDA", _bars(final_close=102.0))
         self.assertNotEqual(setup.verdict, "可做")
         self.assertTrue(any("远离计划入场" in item for item in setup.reasons))
+
+    def test_notification_includes_execution_levels(self):
+        text = _format_intraday_alert(analyze_opening_range_setup("NVDA", _bars()))
+        self.assertIn("入场 E:", text)
+        self.assertIn("止蚀 S:", text)
+        self.assertIn("减仓 T1", text)
 
 
 if __name__ == "__main__":
