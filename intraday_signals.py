@@ -1,8 +1,9 @@
-"""Rule-based opening-range setups for liquid US equities on 5-minute bars."""
+"""Rule-based opening-range setups for liquid US and Hong Kong equities."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import pandas as pd
 
@@ -14,6 +15,8 @@ class IntradaySetup:
     """A long-only opening-range plan; values are trigger levels, not orders."""
 
     symbol: str = ""
+    market: str = "US"
+    session_label: str = ""
     verdict: str = "资料不足"  # 可做 | 等待 | 不做 | 资料不足
     score: int = 0
     last_price: float | None = None
@@ -29,28 +32,73 @@ class IntradaySetup:
     reasons: list[str] = field(default_factory=list)
 
 
-def _rth_bars(data: pd.DataFrame) -> pd.DataFrame:
-    """Keep the latest US regular-session date from Yahoo-style intraday bars."""
+def intraday_market(symbol: str) -> str:
+    """Return the supported intraday market inferred from a Yahoo symbol."""
+    return "HK" if str(symbol or "").strip().upper().endswith(".HK") else "US"
+
+
+def market_label(symbol: str) -> str:
+    return "港股" if intraday_market(symbol) == "HK" else "美股"
+
+
+def is_intraday_alert_window(symbol: str, now: datetime | None = None) -> bool:
+    """True in a supported market's liquid opening windows, excluding Hong Kong lunch."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        market = intraday_market(symbol)
+        zone = ZoneInfo("Asia/Hong_Kong" if market == "HK" else "America/New_York")
+        local_now = now or datetime.now(zone)
+        if local_now.tzinfo is None:
+            local_now = local_now.replace(tzinfo=zone)
+        else:
+            local_now = local_now.astimezone(zone)
+    except Exception:
+        return False
+
+    if local_now.weekday() >= 5:
+        return False
+    minute = local_now.hour * 60 + local_now.minute
+    if intraday_market(symbol) == "HK":
+        return (9 * 60 + 45 <= minute < 12 * 60) or (13 * 60 + 15 <= minute < 16 * 60)
+    return 9 * 60 + 45 <= minute < 12 * 60
+
+
+def _rth_bars(symbol: str, data: pd.DataFrame) -> tuple[pd.DataFrame, str]:
+    """Keep the latest supported regular-session block from Yahoo intraday bars."""
     needed = {"Date", "Open", "High", "Low", "Close", "Volume"}
     if data is None or data.empty or not needed.issubset(data.columns):
-        return pd.DataFrame()
+        return pd.DataFrame(), ""
 
     work = data.copy()
     dates = pd.to_datetime(work["Date"], errors="coerce")
     if dates.isna().all():
-        return pd.DataFrame()
+        return pd.DataFrame(), ""
+    market = intraday_market(symbol)
+    timezone = "Asia/Hong_Kong" if market == "HK" else "America/New_York"
     if getattr(dates.dt, "tz", None) is not None:
-        dates = dates.dt.tz_convert("America/New_York")
+        dates = dates.dt.tz_convert(timezone)
     else:
-        dates = dates.dt.tz_localize("America/New_York")
-    work["_et"] = dates
-    work = work[work["_et"].dt.weekday < 5]
-    minutes = work["_et"].dt.hour * 60 + work["_et"].dt.minute
-    work = work[(minutes >= 9 * 60 + 30) & (minutes < 16 * 60)]
+        dates = dates.dt.tz_localize(timezone)
+    work["_local"] = dates
+    work = work[work["_local"].dt.weekday < 5]
+    minutes = work["_local"].dt.hour * 60 + work["_local"].dt.minute
+    if market == "HK":
+        morning = (minutes >= 9 * 60 + 30) & (minutes < 12 * 60)
+        afternoon = (minutes >= 13 * 60) & (minutes < 16 * 60)
+        work = work[morning | afternoon]
+    else:
+        work = work[(minutes >= 9 * 60 + 30) & (minutes < 16 * 60)]
     if work.empty:
-        return pd.DataFrame()
-    latest_day = work["_et"].dt.normalize().max()
-    return work[work["_et"].dt.normalize() == latest_day].sort_values("_et").reset_index(drop=True)
+        return pd.DataFrame(), ""
+    latest_day = work["_local"].dt.normalize().max()
+    work = work[work["_local"].dt.normalize() == latest_day]
+    if market == "HK" and (work["_local"].dt.hour * 60 + work["_local"].dt.minute >= 13 * 60).any():
+        work = work[work["_local"].dt.hour * 60 + work["_local"].dt.minute >= 13 * 60]
+        session = "下午开市"
+    else:
+        session = "上午开市" if market == "HK" else "开市"
+    return work.sort_values("_local").reset_index(drop=True), session
 
 
 def _add_vwap_and_kdj(data: pd.DataFrame) -> pd.DataFrame:
@@ -70,9 +118,16 @@ def _add_vwap_and_kdj(data: pd.DataFrame) -> pd.DataFrame:
 
 def analyze_opening_range_setup(symbol: str, data: pd.DataFrame) -> IntradaySetup:
     """Build a 5-minute opening-range long plan from one symbol's intraday bars."""
-    bars = _rth_bars(data)
+    market = intraday_market(symbol)
+    bars, session_label = _rth_bars(symbol, data)
     if len(bars) < 20:
-        return IntradaySetup(symbol=symbol, reasons=["本交易日 5 分钟 RTH K线不足，09:45 ET 后再检查。"])
+        market_name = "港股" if market == "HK" else "美股"
+        return IntradaySetup(
+            symbol=symbol,
+            market=market,
+            session_label=session_label,
+            reasons=[f"本交易时段 5 分钟 K线不足，{market_name}开市后再检查。"],
+        )
 
     bars = add_bollinger(bars)
     bars = add_rsi(bars)
@@ -85,7 +140,7 @@ def analyze_opening_range_setup(symbol: str, data: pd.DataFrame) -> IntradaySetu
     true_range = pd.concat([(high - low).abs(), (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
     atr = float(true_range.rolling(14, min_periods=14).mean().iloc[-1])
     if not pd.notna(atr) or atr <= 0:
-        return IntradaySetup(symbol=symbol, reasons=["盘中 ATR 不足，无法计算止损。"])
+        return IntradaySetup(symbol=symbol, market=market, session_label=session_label, reasons=["盘中 ATR 不足，无法计算止损。"])
 
     current = bars.iloc[-1]
     opening = bars.iloc[:3]
@@ -97,7 +152,7 @@ def analyze_opening_range_setup(symbol: str, data: pd.DataFrame) -> IntradaySetu
     stop = min(vwap, recent_low) - atr * 0.15
     risk = entry - stop
     if risk <= 0:
-        return IntradaySetup(symbol=symbol, reasons=["入场与止损价无有效距离，等待结构形成。"])
+        return IntradaySetup(symbol=symbol, market=market, session_label=session_label, reasons=["入场与止损价无有效距离，等待结构形成。"])
 
     score = 0
     reasons: list[str] = []
@@ -172,6 +227,8 @@ def analyze_opening_range_setup(symbol: str, data: pd.DataFrame) -> IntradaySetu
 
     return IntradaySetup(
         symbol=symbol,
+        market=market,
+        session_label=session_label,
         verdict=verdict,
         score=max(0, min(100, score)),
         last_price=last_price,

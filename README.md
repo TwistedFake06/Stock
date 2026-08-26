@@ -235,9 +235,12 @@ streamlit run app.py
 
 ## iPhone 自动通知（Telegram）
 
-`run_alert.bat` 会每 5 分钟扫描 App Watchlist，并仅在美股 `09:45–12:00 ET`
-发现新的「开市超短」可做 setup 时推送 Telegram。通知会包含入场 `E`、止蚀 `S`、
+`run_alert.bat` 会每 5 分钟扫描 `watchlist_scan.txt`，并仅在美股 `09:45–12:00 ET`
+或港股全日 `09:45–12:00`、`13:15–16:00 HKT` 发现新的「盘中超短」可做 setup 时推送 Telegram。通知会包含入场 `E`、止蚀 `S`、
 分批减仓 `T1/T2`；同一只股票持续符合条件时不会重复洗版。
+
+港股以 Yahoo 格式加入 `watchlist_scan.txt`，例如 `0700.HK`、`9988.HK`；港股午休后会以
+下午开市重新计算 VWAP 和首 15 分钟区间。
 
 1. 在 Telegram 找 `@BotFather`，执行 `/newbot`，取得 bot token。
 2. 向新 bot 发送任意一条消息，再在浏览器打开

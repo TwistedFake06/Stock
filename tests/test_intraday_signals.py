@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from intraday_signals import analyze_opening_range_setup
+from intraday_signals import analyze_opening_range_setup, is_intraday_alert_window
 from scripts.watchlist_alert import _format_intraday_alert
 
 
@@ -24,6 +26,12 @@ def _bars(*, final_close: float = 100.8, final_volume: float = 4_000) -> pd.Data
             "Volume": [1_000] * 23 + [final_volume],
         }
     )
+
+
+def _hk_bars() -> pd.DataFrame:
+    bars = _bars()
+    bars["Date"] = pd.date_range("2026-08-25 09:30", periods=24, freq="5min", tz="Asia/Hong_Kong")
+    return bars
 
 
 class TestOpeningRangeSetup(unittest.TestCase):
@@ -50,6 +58,20 @@ class TestOpeningRangeSetup(unittest.TestCase):
         self.assertIn("入场 E:", text)
         self.assertIn("止蚀 S:", text)
         self.assertIn("减仓 T1", text)
+
+    def test_hong_kong_bars_use_hong_kong_market_session(self):
+        setup = analyze_opening_range_setup("0700.HK", _hk_bars())
+        self.assertEqual(setup.market, "HK")
+        self.assertEqual(setup.session_label, "上午开市")
+        self.assertEqual(setup.verdict, "可做")
+
+    def test_hong_kong_alert_window_excludes_lunch(self):
+        hkt = ZoneInfo("Asia/Hong_Kong")
+        self.assertTrue(is_intraday_alert_window("0700.HK", datetime(2026, 8, 25, 10, 0, tzinfo=hkt)))
+        self.assertFalse(is_intraday_alert_window("0700.HK", datetime(2026, 8, 25, 12, 30, tzinfo=hkt)))
+        self.assertTrue(is_intraday_alert_window("0700.HK", datetime(2026, 8, 25, 13, 30, tzinfo=hkt)))
+        self.assertTrue(is_intraday_alert_window("0700.HK", datetime(2026, 8, 25, 15, 59, tzinfo=hkt)))
+        self.assertFalse(is_intraday_alert_window("0700.HK", datetime(2026, 8, 25, 16, 0, tzinfo=hkt)))
 
 
 if __name__ == "__main__":

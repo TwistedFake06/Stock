@@ -18,7 +18,7 @@ if exist "%~dp0.env" (
 )
 
 echo.
-echo Opening-hours 5-minute auto-alert every 5 minutes (09:45-12:00 ET)
+echo Opening-hours 5-minute auto-alert every 5 minutes (US and Hong Kong sessions)
 echo Telegram needs TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env
 echo Ctrl+C to stop
 echo.

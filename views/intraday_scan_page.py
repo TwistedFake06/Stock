@@ -1,35 +1,33 @@
 """Opening-hours 5-minute scan for the active app watchlist."""
 from __future__ import annotations
 
-from datetime import datetime
-
 import pandas as pd
 import streamlit as st
 
-from intraday_signals import IntradaySetup, analyze_opening_range_setup
-from market_session import us_session_clock
-from stock_service import DEFAULT_WATCHLIST, fetch_history_extended
+from intraday_signals import IntradaySetup, analyze_opening_range_setup, is_intraday_alert_window
+from stock_service import DEFAULT_WATCHLIST, fetch_history_extended, normalize_symbol
 from views.common import fmt_number
 
 
-def _is_opening_window() -> bool:
-    try:
-        from zoneinfo import ZoneInfo
-
-        now = datetime.now(ZoneInfo("America/New_York"))
-        return now.weekday() < 5 and (9, 45) <= (now.hour, now.minute) < (12, 0)
-    except Exception:
-        return False
+def _parse_symbols(raw: str) -> list[str]:
+    symbols: list[str] = []
+    seen: set[str] = set()
+    for part in raw.replace(",", "\n").replace(";", "\n").splitlines():
+        symbol = normalize_symbol(part.strip())
+        if symbol and symbol not in seen:
+            seen.add(symbol)
+            symbols.append(symbol)
+    return symbols
 
 
 def _format_price(value: float | None) -> str:
     return fmt_number(value, digits=2) if value is not None else "—"
 
 
-def _row(setup: IntradaySetup, live_window: bool) -> dict[str, object]:
+def _row(setup: IntradaySetup) -> dict[str, object]:
     verdict = setup.verdict
-    if not live_window and verdict == "可做":
-        verdict = "等待下次RTH"
+    if not is_intraday_alert_window(setup.symbol) and verdict == "可做":
+        verdict = "等待下次开市"
     return {
         "状态": verdict,
         "代码": setup.symbol,
@@ -47,25 +45,26 @@ def _row(setup: IntradaySetup, live_window: bool) -> dict[str, object]:
 
 
 def render_intraday_scan() -> None:
-    st.header("开市超短扫描")
+    st.header("盘中超短扫描")
     st.caption(
-        "自选股 · 美股 RTH 5分钟线 · 首15分钟区间 + VWAP + Boll + MACD + RSI + KDJ + 量能 + 背离警报"
+        "美股 / 港股 · 5分钟线 · 首15分钟区间 + VWAP + Boll + MACD + RSI + KDJ + 量能 + 背离警报"
     )
     st.caption("E 为回踩/突破触发价；S 为硬止损；到 T1 先减仓，T2 再减仓。仅作交易计划辅助，非投资建议。")
+    st.caption("美股扫描窗口：09:45–12:00 ET；港股全日扫描：09:45–12:00、13:15–16:00 HKT（午休后重算 VWAP/开盘区间）。")
 
-    clock = us_session_clock()
-    live_window = _is_opening_window()
-    if live_window:
-        st.success(f"{clock.label_zh} · {clock.et_now} · 正在开市首三小时，允许检查即时 setup。")
-    else:
-        st.warning(
-            f"{clock.label_zh} · {clock.et_now} · 这页的即时入场窗口为 09:45–12:00 ET；"
-            "当前结果只供下一次 RTH 准备，不应据此下单。"
+    default_symbols = "\n".join(st.session_state.get("watchlist") or DEFAULT_WATCHLIST)
+    if "intraday_symbols_text" not in st.session_state:
+        st.session_state.intraday_symbols_text = default_symbols
+    with st.expander("超短扫描清单（可加入港股）", expanded=False):
+        st.text_area(
+            "股票代码（一行一个）",
+            key="intraday_symbols_text",
+            height=150,
+            help="例如 NVDA、0700.HK、9988.HK；此页清单独立于美股快速自选。",
         )
-
-    symbols = list(st.session_state.get("watchlist") or DEFAULT_WATCHLIST)
+    symbols = _parse_symbols(str(st.session_state.get("intraday_symbols_text") or ""))
     if not symbols:
-        st.info("自选股为空，请先到「自选股」添加美股代码。")
+        st.info("清单为空，请输入美股或港股代码。")
         return
 
     st.caption(f"扫描 {len(symbols)} 只：{', '.join(symbols[:12])}{'…' if len(symbols) > 12 else ''}")
@@ -79,12 +78,12 @@ def render_intraday_scan() -> None:
         except Exception as exc:
             setup = IntradaySetup(symbol=symbol, reasons=[f"资料读取失败：{type(exc).__name__}"])
         setups.append(setup)
-        rows.append(_row(setup, live_window))
+        rows.append(_row(setup))
         progress.progress((index + 1) / len(symbols), text=f"分析 {symbol}…")
     progress.empty()
 
     table = pd.DataFrame(rows)
-    rank = {"可做": 3, "等待": 2, "等待下次RTH": 1, "不做": 0, "资料不足": -1}
+    rank = {"可做": 3, "等待": 2, "等待下次开市": 1, "不做": 0, "资料不足": -1}
     table["_rank"] = table["状态"].map(rank).fillna(-1)
     table = table.sort_values(["_rank", "分数"], ascending=False).drop(columns="_rank")
 
@@ -95,7 +94,7 @@ def render_intraday_scan() -> None:
     else:
         st.dataframe(tradeable, width="stretch", hide_index=True)
 
-    waiting = table[table["状态"].isin(["等待", "等待下次RTH"])]
+    waiting = table[table["状态"].isin(["等待", "等待下次开市"])]
     st.subheader(f"等待条件 · {len(waiting)}")
     if waiting.empty:
         st.caption("目前没有等待确认的标的。")

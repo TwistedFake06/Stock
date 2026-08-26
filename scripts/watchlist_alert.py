@@ -17,7 +17,7 @@ Usage:
     # only alert 可以入場 (stricter swing mode)
   .venv\\Scripts\\python.exe scripts\\watchlist_alert.py --min enter
 
-    # opening-hours 5-minute setup; only scans 09:45–12:00 ET
+    # 5-minute intraday setup: US morning + both Hong Kong trading sessions
     .venv\\Scripts\\python.exe scripts\\watchlist_alert.py --mode intraday --interval 300
 
 Alert state is saved so the same symbol won't spam every 5 minutes
@@ -58,8 +58,12 @@ except Exception:
             if k and v and not (os.environ.get(k) or "").strip():
                 os.environ[k] = v
 
-from intraday_signals import IntradaySetup, analyze_opening_range_setup
-from market_session import us_session_clock
+from intraday_signals import (
+    IntradaySetup,
+    analyze_opening_range_setup,
+    is_intraday_alert_window,
+    market_label,
+)
 from stock_service import DEFAULT_WATCHLIST, fetch_history_extended, normalize_symbol
 from trade_sop import build_trade_sop
 
@@ -261,17 +265,6 @@ def clear_if_not_enterable(state: dict[str, Any], symbol: str) -> None:
         alerts[symbol]["verdict"] = "out"
 
 
-def _in_intraday_alert_window() -> bool:
-    """Allow automatic opening setups only after the first 15 minutes, before noon ET."""
-    try:
-        from zoneinfo import ZoneInfo
-
-        now = datetime.now(ZoneInfo("America/New_York"))
-        return now.weekday() < 5 and (9, 45) <= (now.hour, now.minute) < (12, 0)
-    except Exception:
-        return False
-
-
 def run_intraday_scan(
     *,
     symbols: list[str],
@@ -279,22 +272,23 @@ def run_intraday_scan(
     repeat: bool,
     dry_run: bool,
 ) -> dict[str, Any]:
-    """Notify only fresh, valid 5-minute opening-range plans during the live window."""
-    clock = us_session_clock()
-    if not _in_intraday_alert_window():
-        print(f"[{clock.et_now}] 开市超短通知待机（只在 09:45–12:00 ET 扫描）")
-        return {"hits": [], "errors": []}
-
+    """Notify fresh 5-minute plans in each symbol's own market opening window."""
     state = _load_state()
     hits: list[str] = []
     errors: list[str] = []
-    print(f"[{clock.et_now}] 超短扫描 {len(symbols)} 只 · 5分钟 RTH")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] 超短扫描 {len(symbols)} 只 · 按市场时段")
     for sym in symbols:
         state_key = f"intraday:{sym}"
         try:
+            if not is_intraday_alert_window(sym):
+                print(f"  {sym:8} {market_label(sym)} 待机（非开市扫描窗口）")
+                continue
             history = fetch_history_extended(sym, period="5d", interval="5m")
             setup = analyze_opening_range_setup(sym, history)
-            print(f"  {sym:8} {setup.verdict:6} score={setup.score:3} last={setup.last_price}")
+            print(
+                f"  {sym:8} {market_label(sym)} {setup.session_label or '—':4} "
+                f"{setup.verdict:6} score={setup.score:3} last={setup.last_price}"
+            )
             if setup.verdict != "可做":
                 clear_if_not_enterable(state, state_key)
                 continue
@@ -428,7 +422,7 @@ def main() -> None:
         "--mode",
         choices=["swing", "intraday"],
         default="swing",
-        help="swing=existing SOP scan; intraday=5-minute opening-range scan (09:45–12:00 ET)",
+        help="swing=existing SOP scan; intraday=5-minute US/HK opening-range scan",
     )
     p.add_argument("--capital-hkd", type=float, default=50_000.0)
     p.add_argument("--risk-pct", type=float, default=1.0)
