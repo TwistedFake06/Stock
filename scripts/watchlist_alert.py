@@ -157,13 +157,15 @@ def _format_intraday_alert(setup: IntradaySetup) -> str:
         return f"{value:.2f}" if value is not None else "—"
 
     lines = [
-        f"📣 开市超短 · {setup.symbol}",
+        f"📣 盘中超短 · {setup.symbol}",
         f"可做 · 分数 {setup.score}/100 · 现价 {price(setup.last_price)}",
         f"入场 E: {price(setup.entry)}  止蚀 S: {price(setup.stop)}",
         f"减仓 T1 (1R): {price(setup.target_1)}  T2 (2R): {price(setup.target_2)}",
     ]
     if setup.relative_volume is not None:
         lines.append(f"5分钟量比: {setup.relative_volume:.1f}x")
+    if setup.prior_session_label != "资料不足":
+        lines.append(f"前日K线背景: {setup.prior_session_label}")
     if setup.divergence_warning:
         lines.append("⚠️ MACD 顶背离：不加仓，按计划减仓/止蚀")
     lines.append("限价等 E；到 T1 减仓，止蚀不可下移。非投资建议。")
@@ -316,6 +318,7 @@ def run_intraday_scan(
                 "target_2": setup.target_2,
                 "relative_volume": setup.relative_volume,
                 "divergence_warning": setup.divergence_warning,
+                "prior_session": setup.prior_session_label,
             }
             if dry_run:
                 print("    [dry-run] 不发送:\n" + text)

@@ -55,6 +55,7 @@ def _row(setup: IntradaySetup) -> dict[str, object]:
         "每股风险": _format_price(setup.risk_per_share),
         "分数": setup.score,
         "量比": f"{setup.relative_volume:.1f}x" if setup.relative_volume is not None else "—",
+        "前日背景": setup.prior_session_label,
         "背离": "警报" if setup.divergence_warning else "—",
         "执行条件": "；".join(setup.reasons[:3]),
     }

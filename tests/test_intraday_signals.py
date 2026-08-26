@@ -36,6 +36,13 @@ def _hk_bars() -> pd.DataFrame:
     return bars
 
 
+def _with_prior_strong_session() -> pd.DataFrame:
+    prior = _bars(final_close=104.0)
+    prior["Date"] = pd.date_range("2026-08-24 09:30", periods=24, freq="5min", tz="America/New_York")
+    current = _bars()
+    return pd.concat([prior, current], ignore_index=True)
+
+
 class TestOpeningRangeSetup(unittest.TestCase):
     def test_breakout_builds_entry_stop_and_targets(self):
         setup = analyze_opening_range_setup("NVDA", _bars())
@@ -56,10 +63,16 @@ class TestOpeningRangeSetup(unittest.TestCase):
         self.assertTrue(any("远离计划入场" in item for item in setup.reasons))
 
     def test_notification_includes_execution_levels(self):
-        text = _format_intraday_alert(analyze_opening_range_setup("NVDA", _bars()))
+        text = _format_intraday_alert(analyze_opening_range_setup("NVDA", _with_prior_strong_session()))
         self.assertIn("入场 E:", text)
         self.assertIn("止蚀 S:", text)
         self.assertIn("减仓 T1", text)
+        self.assertIn("前日K线背景: 前日强势收市", text)
+
+    def test_prior_strong_session_is_shown_as_trend_context(self):
+        setup = analyze_opening_range_setup("NVDA", _with_prior_strong_session())
+        self.assertEqual(setup.prior_session_label, "前日强势收市")
+        self.assertTrue(any("顺势背景加分" in item for item in setup.reasons))
 
     def test_hong_kong_bars_use_hong_kong_market_session(self):
         setup = analyze_opening_range_setup("0700.HK", _hk_bars())

@@ -29,6 +29,7 @@ class IntradaySetup:
     risk_per_share: float | None = None
     relative_volume: float | None = None
     divergence_warning: bool = False
+    prior_session_label: str = "资料不足"
     reasons: list[str] = field(default_factory=list)
 
 
@@ -64,16 +65,16 @@ def is_intraday_alert_window(symbol: str, now: datetime | None = None) -> bool:
     return 9 * 60 + 45 <= minute < 12 * 60
 
 
-def _rth_bars(symbol: str, data: pd.DataFrame) -> tuple[pd.DataFrame, str]:
-    """Keep the latest supported regular-session block from Yahoo intraday bars."""
+def _regular_session_bars(symbol: str, data: pd.DataFrame) -> pd.DataFrame:
+    """Keep all supported regular-session bars, localized to their market."""
     needed = {"Date", "Open", "High", "Low", "Close", "Volume"}
     if data is None or data.empty or not needed.issubset(data.columns):
-        return pd.DataFrame(), ""
+        return pd.DataFrame()
 
     work = data.copy()
     dates = pd.to_datetime(work["Date"], errors="coerce")
     if dates.isna().all():
-        return pd.DataFrame(), ""
+        return pd.DataFrame()
     market = intraday_market(symbol)
     timezone = "Asia/Hong_Kong" if market == "HK" else "America/New_York"
     if getattr(dates.dt, "tz", None) is not None:
@@ -89,8 +90,15 @@ def _rth_bars(symbol: str, data: pd.DataFrame) -> tuple[pd.DataFrame, str]:
         work = work[morning | afternoon]
     else:
         work = work[(minutes >= 9 * 60 + 30) & (minutes < 16 * 60)]
+    return work.sort_values("_local").reset_index(drop=True)
+
+
+def _rth_bars(symbol: str, data: pd.DataFrame) -> tuple[pd.DataFrame, str]:
+    """Keep the latest supported regular-session block from Yahoo intraday bars."""
+    work = _regular_session_bars(symbol, data)
     if work.empty:
         return pd.DataFrame(), ""
+    market = intraday_market(symbol)
     latest_day = work["_local"].dt.normalize().max()
     work = work[work["_local"].dt.normalize() == latest_day]
     if market == "HK" and (work["_local"].dt.hour * 60 + work["_local"].dt.minute >= 13 * 60).any():
@@ -99,6 +107,35 @@ def _rth_bars(symbol: str, data: pd.DataFrame) -> tuple[pd.DataFrame, str]:
     else:
         session = "上午开市" if market == "HK" else "开市"
     return work.sort_values("_local").reset_index(drop=True), session
+
+
+def _prior_session_label(symbol: str, data: pd.DataFrame, current_bars: pd.DataFrame) -> str:
+    """Classify the previous complete regular session without making it an entry signal."""
+    if current_bars.empty:
+        return "资料不足"
+    all_bars = _regular_session_bars(symbol, data)
+    current_day = current_bars["_local"].dt.normalize().iloc[0]
+    prior = all_bars[all_bars["_local"].dt.normalize() < current_day]
+    if prior.empty:
+        return "资料不足"
+    last_day = prior["_local"].dt.normalize().max()
+    prior = prior[prior["_local"].dt.normalize() == last_day]
+    if len(prior) < 10:
+        return "资料不足"
+    session_open = float(prior["Open"].iloc[0])
+    session_close = float(prior["Close"].iloc[-1])
+    high = float(prior["High"].max())
+    low = float(prior["Low"].min())
+    span = high - low
+    if span <= 0 or session_open <= 0:
+        return "中性"
+    close_position = (session_close - low) / span
+    change_pct = (session_close / session_open - 1) * 100
+    if change_pct >= 0.4 and close_position >= 0.65:
+        return "前日强势收市"
+    if change_pct <= -0.4 and close_position <= 0.35:
+        return "前日弱势收市"
+    return "前日中性"
 
 
 def _add_vwap_and_kdj(data: pd.DataFrame) -> pd.DataFrame:
@@ -120,12 +157,14 @@ def analyze_opening_range_setup(symbol: str, data: pd.DataFrame) -> IntradaySetu
     """Build a 5-minute opening-range long plan from one symbol's intraday bars."""
     market = intraday_market(symbol)
     bars, session_label = _rth_bars(symbol, data)
+    prior_label = _prior_session_label(symbol, data, bars)
     if len(bars) < 20:
         market_name = "港股" if market == "HK" else "美股"
         return IntradaySetup(
             symbol=symbol,
             market=market,
             session_label=session_label,
+            prior_session_label=prior_label,
             reasons=[f"本交易时段 5 分钟 K线不足，{market_name}开市后再检查。"],
         )
 
@@ -140,7 +179,7 @@ def analyze_opening_range_setup(symbol: str, data: pd.DataFrame) -> IntradaySetu
     true_range = pd.concat([(high - low).abs(), (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
     atr = float(true_range.rolling(14, min_periods=14).mean().iloc[-1])
     if not pd.notna(atr) or atr <= 0:
-        return IntradaySetup(symbol=symbol, market=market, session_label=session_label, reasons=["盘中 ATR 不足，无法计算止损。"])
+        return IntradaySetup(symbol=symbol, market=market, session_label=session_label, prior_session_label=prior_label, reasons=["盘中 ATR 不足，无法计算止损。"])
 
     current = bars.iloc[-1]
     opening = bars.iloc[:3]
@@ -152,10 +191,18 @@ def analyze_opening_range_setup(symbol: str, data: pd.DataFrame) -> IntradaySetu
     stop = min(vwap, recent_low) - atr * 0.15
     risk = entry - stop
     if risk <= 0:
-        return IntradaySetup(symbol=symbol, market=market, session_label=session_label, reasons=["入场与止损价无有效距离，等待结构形成。"])
+        return IntradaySetup(symbol=symbol, market=market, session_label=session_label, prior_session_label=prior_label, reasons=["入场与止损价无有效距离，等待结构形成。"])
 
     score = 0
     reasons: list[str] = []
+    if prior_label == "前日强势收市":
+        score += 8
+        reasons.append("前一交易日强势收市，顺势背景加分")
+    elif prior_label == "前日弱势收市":
+        score -= 8
+        reasons.append("前一交易日弱势收市，逆势做多减分")
+    elif prior_label == "前日中性":
+        reasons.append("前一交易日中性，不影响盘中评分")
     if last_price > vwap:
         score += 20
         reasons.append("价格在 VWAP 上方")
@@ -241,5 +288,6 @@ def analyze_opening_range_setup(symbol: str, data: pd.DataFrame) -> IntradaySetu
         risk_per_share=risk,
         relative_volume=relative_volume,
         divergence_warning=divergence,
+        prior_session_label=prior_label,
         reasons=reasons,
     )
