@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from intraday_signals import analyze_opening_range_setup, is_intraday_alert_window
 from scripts.watchlist_alert import _format_intraday_alert
+from views.intraday_scan_page import _load_default_symbols
 
 
 def _bars(*, final_close: float = 100.8, final_volume: float = 4_000) -> pd.DataFrame:
@@ -72,6 +74,11 @@ class TestOpeningRangeSetup(unittest.TestCase):
         self.assertTrue(is_intraday_alert_window("0700.HK", datetime(2026, 8, 25, 13, 30, tzinfo=hkt)))
         self.assertTrue(is_intraday_alert_window("0700.HK", datetime(2026, 8, 25, 15, 59, tzinfo=hkt)))
         self.assertFalse(is_intraday_alert_window("0700.HK", datetime(2026, 8, 25, 16, 0, tzinfo=hkt)))
+
+    def test_default_intraday_list_includes_hong_kong_symbols(self):
+        symbols = _load_default_symbols()
+        self.assertIn("0700.HK", symbols)
+        self.assertEqual(len([symbol for symbol in symbols if symbol.endswith(".HK")]), 20)
 
 
 if __name__ == "__main__":

@@ -1,12 +1,28 @@
 """Opening-hours 5-minute scan for the active app watchlist."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import streamlit as st
 
 from intraday_signals import IntradaySetup, analyze_opening_range_setup, is_intraday_alert_window
 from stock_service import DEFAULT_WATCHLIST, fetch_history_extended, normalize_symbol
 from views.common import fmt_number
+
+ROOT = Path(__file__).resolve().parents[1]
+SCAN_FILE = ROOT / "watchlist_scan.txt"
+
+
+def _load_default_symbols() -> list[str]:
+    if not SCAN_FILE.exists():
+        return list(st.session_state.get("watchlist") or DEFAULT_WATCHLIST)
+    symbols: list[str] = []
+    for line in SCAN_FILE.read_text(encoding="utf-8").splitlines():
+        symbol = line.split("#", 1)[0].strip()
+        if symbol:
+            symbols.append(symbol)
+    return symbols or list(st.session_state.get("watchlist") or DEFAULT_WATCHLIST)
 
 
 def _parse_symbols(raw: str) -> list[str]:
@@ -52,10 +68,13 @@ def render_intraday_scan() -> None:
     st.caption("E 为回踩/突破触发价；S 为硬止损；到 T1 先减仓，T2 再减仓。仅作交易计划辅助，非投资建议。")
     st.caption("美股扫描窗口：09:45–12:00 ET；港股全日扫描：09:45–12:00、13:15–16:00 HKT（午休后重算 VWAP/开盘区间）。")
 
-    default_symbols = "\n".join(st.session_state.get("watchlist") or DEFAULT_WATCHLIST)
+    default_symbols = "\n".join(_load_default_symbols())
     if "intraday_symbols_text" not in st.session_state:
         st.session_state.intraday_symbols_text = default_symbols
     with st.expander("超短扫描清单（可加入港股）", expanded=False):
+        if st.button("载入美股 + 20 港股默认清单", key="load_intraday_defaults"):
+            st.session_state.intraday_symbols_text = default_symbols
+            st.rerun()
         st.text_area(
             "股票代码（一行一个）",
             key="intraday_symbols_text",
