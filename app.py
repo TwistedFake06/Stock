@@ -44,6 +44,7 @@ try:
     from views.entry_page import render_entry
     from views.extra_page import render_extra
     from views.scan_page import render_scan
+    from views.intraday_scan_page import render_intraday_scan
     from views.hold_page import render_hold_page
     from views.options_page import render_options
     from views.sop_page import render_sop
@@ -151,6 +152,7 @@ PAGE_MAIN = [
     "投资SOP",
     "我已买入",
     "Watchlist扫描",
+    "开市超短扫描",
     "策略验证",
     "更多…",
 ]
@@ -357,6 +359,8 @@ elif page == "我已买入":
     render_hold_page(symbol, period=period, interval=interval)
 elif page == "Watchlist扫描":
     render_scan(period, interval, period_label)
+elif page == "开市超短扫描":
+    render_intraday_scan()
 elif page == "策略验证":
     render_strategy_validation(symbol)
 elif page == "行情看板":
