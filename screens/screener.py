@@ -39,18 +39,20 @@ def render_screener() -> None:
     top = scored.iloc[0]["Ticker"] if not scored.empty else "尚未訓練"
     a, b, c = st.columns(3)
     a.metric("股票池數量", len(universe)); b.metric("成功下載數量", latest["Ticker"].nunique()); c.metric("模型分數最高", top)
-    st.subheader("規則型篩選")
-    st.caption("以下條件只作研究篩選，與模型分數分開呈現。")
+    st.subheader("今日股票清單")
+    st.caption(f"成功下載 {latest['Ticker'].nunique()} 隻；目前規則條件符合 {len(rules)} 隻。以下條件只作研究篩選，與模型分數分開呈現。")
+    view_mode = st.radio("顯示範圍", ["全部股票", "只看符合規則"], horizontal=True, key="workbench_view_mode")
+    shown = latest if view_mode == "全部股票" else rules
     columns = ["Ticker", "名稱", "Close", "ret_1", "ret_5", "ret_20", "vol_ratio_20", "rsi_14", "score", "signal"]
-    table = rules.reindex(columns=columns).rename(columns={"Ticker": "代碼", "Close": "最新收市", "ret_1": "1日%", "ret_5": "5日%", "ret_20": "20日%", "vol_ratio_20": "量比", "rsi_14": "RSI", "score": "LightGBM 分數", "signal": "訊號"})
+    table = shown.sort_values("score", ascending=False, na_position="last").reindex(columns=columns).rename(columns={"Ticker": "代碼", "Close": "最新收市", "ret_1": "1日%", "ret_5": "5日%", "ret_20": "20日%", "vol_ratio_20": "量比", "rsi_14": "RSI", "score": "LightGBM 分數", "signal": "訊號"})
     for column in ("1日%", "5日%", "20日%"):
         table[column] = table[column].map(lambda value: f"{value:.2%}" if pd.notna(value) else "-")
     table["最新收市"] = table["最新收市"].map(lambda value: f"{value:.2f}")
     table["LightGBM 分數"] = table["LightGBM 分數"].map(lambda value: f"{value:.3f}" if pd.notna(value) else "未訓練")
     st.dataframe(table, width="stretch", hide_index=True)
     st.download_button("下載候選 CSV", table.to_csv(index=False).encode("utf-8-sig"), "今日候選.csv", "text/csv")
-    if not rules.empty:
-        ticker = st.selectbox("查看迷你走勢", rules["Ticker"].tolist(), key="workbench_preview")
+    if not shown.empty:
+        ticker = st.selectbox("查看迷你走勢", shown["Ticker"].tolist(), key="workbench_preview")
         chart_data = features[features["Ticker"] == ticker].tail(90)
         st.plotly_chart(px.line(chart_data, x="Date", y="Close", title=f"{ticker} 近 90 日收市"), width="stretch")
     if scored.empty:
