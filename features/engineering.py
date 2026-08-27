@@ -45,4 +45,11 @@ def _add_features(group: pd.DataFrame) -> pd.DataFrame:
 def build_features(prices: pd.DataFrame) -> pd.DataFrame:
     if prices.empty:
         return prices.copy()
-    return prices.groupby("Ticker", group_keys=False).apply(_add_features).reset_index(drop=True)
+    frames: list[pd.DataFrame] = []
+    for ticker, group in prices.groupby("Ticker", sort=False):
+        frame = _add_features(group)
+        # pandas 3 excludes grouping columns from DataFrameGroupBy.apply().
+        # Restoring it here keeps the output contract stable across versions.
+        frame["Ticker"] = ticker
+        frames.append(frame)
+    return pd.concat(frames, ignore_index=True)
