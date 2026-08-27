@@ -19,8 +19,22 @@ def sidebar_controls() -> tuple[dict[str, str], str, pd.DataFrame, tuple[str, ..
         st.divider()
         st.markdown("### 短炒工作台")
         market = st.selectbox("市場", ["全部", "只港股", "只美股"], key="workbench_market")
-        candidates = list(DEFAULT_UNIVERSE if market == "全部" else {k: v for k, v in DEFAULT_UNIVERSE.items() if k.endswith(".HK") == (market == "只港股")})
-        chosen = st.multiselect("股票池", candidates, default=candidates, key="workbench_tickers")
+        candidates = list(
+            DEFAULT_UNIVERSE
+            if market == "全部"
+            else {
+                ticker: name
+                for ticker, name in DEFAULT_UNIVERSE.items()
+                if ticker.endswith(".HK") == (market == "只港股")
+            }
+        )
+        chosen = st.multiselect(
+            "股票池",
+            candidates,
+            default=candidates,
+            format_func=lambda ticker: f"{ticker} · {DEFAULT_UNIVERSE[ticker]}",
+            key=f"workbench_tickers_{market}",
+        )
         custom = st.text_input("自訂代碼（逗號分隔）", key="workbench_custom")
         period_label = st.selectbox("數據年期", ["1y", "2y"], index=1, key="workbench_period")
         if st.button("重新整理數據", key="workbench_refresh"):

@@ -15,7 +15,12 @@ def render_chart() -> None:
     universe, _, features, failed = sidebar_controls()
     if failed:
         st.warning("下載失敗：" + ", ".join(failed))
-    ticker = st.selectbox("代碼", list(universe), key="workbench_chart_ticker")
+    ticker = st.selectbox(
+        "代碼",
+        list(universe),
+        format_func=lambda symbol: f"{symbol} · {universe[symbol]}",
+        key="workbench_chart_ticker",
+    )
     frame = features[features["Ticker"] == ticker].tail(180).copy()
     if frame.empty:
         st.warning("沒有可用歷史資料。")
