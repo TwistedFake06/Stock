@@ -39,6 +39,7 @@ DEFAULT_WATCHLIST = [
     "APP",
     "MSTR",
     "COIN",
+    "LITE",
 ]
 
 

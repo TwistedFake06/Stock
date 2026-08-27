@@ -26,6 +26,7 @@ MRVL
 APP
 MSTR
 COIN
+LITE
 
 # Hong Kong liquid blue chips / large caps (Yahoo format)
 0700.HK

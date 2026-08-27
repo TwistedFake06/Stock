@@ -10,6 +10,7 @@ US_UNIVERSE = {
     "AAPL": "Apple", "MSFT": "Microsoft", "NVDA": "NVIDIA", "AMZN": "Amazon",
     "META": "Meta", "TSLA": "Tesla", "GOOGL": "Alphabet", "AMD": "AMD",
     "AVGO": "Broadcom", "QQQ": "Nasdaq 100 ETF", "SPY": "S&P 500 ETF",
+    "LITE": "Lumentum",
 }
 DEFAULT_UNIVERSE = {**HK_UNIVERSE, **US_UNIVERSE}
 MODEL_DIR = "models"

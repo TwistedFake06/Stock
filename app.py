@@ -236,43 +236,44 @@ with st.sidebar:
             help="进阶/旧页，日常可不用",
         )
 
-    st.divider()
-    st.text_input(
-        "股票代码",
-        key="symbol_box",
-        placeholder="AAPL / NVDA / SPY",
-        help="Enter 或「应用」；快速选择会打开投资SOP。",
-        on_change=_on_symbol_box_change,
-    )
-    apply_col, tip_col = st.columns([1, 1.2])
-    with apply_col:
-        if st.button("应用代码", width="stretch", key="btn_apply_symbol"):
-            box = str(st.session_state.get("symbol_box") or "").strip()
-            if box:
-                ns = normalize_symbol(box)
-                if ns:
-                    st.session_state.symbol = ns
-                    st.session_state._goto_sop = True
-                st.rerun()
+    if page_main != "短炒工作台":
+        st.divider()
+        st.text_input(
+            "股票代码",
+            key="symbol_box",
+            placeholder="AAPL / NVDA / SPY",
+            help="Enter 或「应用」；快速选择会打开投资SOP。",
+            on_change=_on_symbol_box_change,
+        )
+        apply_col, tip_col = st.columns([1, 1.2])
+        with apply_col:
+            if st.button("应用代码", width="stretch", key="btn_apply_symbol"):
+                box = str(st.session_state.get("symbol_box") or "").strip()
+                if box:
+                    ns = normalize_symbol(box)
+                    if ns:
+                        st.session_state.symbol = ns
+                        st.session_state._goto_sop = True
+                    st.rerun()
+                else:
+                    st.warning("请输入代码")
+        with tip_col:
+            cur = str(st.session_state.get("symbol") or "")
+            if cur and not is_us_symbol(cur):
+                st.caption(f"当前 `{cur}` 非美股")
             else:
-                st.warning("请输入代码")
-    with tip_col:
-        cur = str(st.session_state.get("symbol") or "")
-        if cur and not is_us_symbol(cur):
-            st.caption(f"当前 `{cur}` 非美股")
-        else:
-            st.caption(f"当前：`{cur or '—'}`")
+                st.caption(f"当前：`{cur or '—'}`")
 
-    period_label = st.selectbox("时间范围", list(PERIOD_MAP.keys()), index=3)
-    interval_label = st.selectbox("K线周期", list(INTERVAL_MAP.keys()), index=0)
-    period = PERIOD_MAP[period_label]
-    interval = INTERVAL_MAP[interval_label]
+        period_label = st.selectbox("时间范围", list(PERIOD_MAP.keys()), index=3)
+        interval_label = st.selectbox("K线周期", list(INTERVAL_MAP.keys()), index=0)
+        period = PERIOD_MAP[period_label]
+        interval = INTERVAL_MAP[interval_label]
 
-    st.caption(f"SOP build: `{_SOP_BUILD}`")
-    st.caption("Cloud 须与本地同一 build；不同=未部署最新代码")
-    with st.expander("v1 定版 · 怎么用（别再加指标）", expanded=False):
-        st.markdown(
-            """
+        st.caption(f"SOP build: `{_SOP_BUILD}`")
+        st.caption("Cloud 须与本地同一 build；不同=未部署最新代码")
+        with st.expander("v1 定版 · 怎么用（别再加指标）", expanded=False):
+            st.markdown(
+                """
 **已定版，暂停加功能。** 目标：少乱做，不是保证暴利。
 
 **未买（投资SOP / 扫描）**  
@@ -302,50 +303,50 @@ with st.sidebar:
 - 可提升纪律与过滤；**不保证赚钱**  
 - 多数日子空手 = 正常
 """
-        )
-
-    st.divider()
-    st.markdown("**快速选择**")
-    try:
-        from stock_service import QUICK_PIN
-    except Exception:
-        QUICK_PIN = ["MU", "SNDK"]
-    pin_syms = [normalize_symbol(p) for p in QUICK_PIN]
-    # 常用：MU / SNDK 固定第一行（一眼点进 SOP）
-    st.caption("常用")
-    pin_cols = st.columns(len(pin_syms) if pin_syms else 2)
-    for i, s in enumerate(pin_syms):
-        if pin_cols[i].button(
-            s,
-            key=f"quick_pin_{s}",
-            width="stretch",
-            type="primary",
-        ):
-            # 确保在自选里
-            if s not in st.session_state.watchlist:
-                st.session_state.watchlist = _ensure_quick_pins(
-                    list(st.session_state.watchlist) + [s]
                 )
-                try:
-                    from views.common import save_watchlist
 
-                    save_watchlist(st.session_state.watchlist)
-                except Exception:
-                    pass
-            _request_symbol(s, open_sop=True)
-            st.rerun()
-    # 其余自选（不含已显示的 pin，避免重复 key）
-    rest = [s for s in st.session_state.watchlist if s not in pin_syms][:10]
-    if rest:
-        st.caption("自选")
-        cols = st.columns(2)
-        for i, s in enumerate(rest):
-            if cols[i % 2].button(s, key=f"quick_{s}", width="stretch"):
+        st.divider()
+        st.markdown("**快速选择**")
+        try:
+            from stock_service import QUICK_PIN
+        except Exception:
+            QUICK_PIN = ["MU", "SNDK"]
+        pin_syms = [normalize_symbol(p) for p in QUICK_PIN]
+        # 常用：MU / SNDK 固定第一行（一眼点进 SOP）
+        st.caption("常用")
+        pin_cols = st.columns(len(pin_syms) if pin_syms else 2)
+        for i, s in enumerate(pin_syms):
+            if pin_cols[i].button(
+                s,
+                key=f"quick_pin_{s}",
+                width="stretch",
+                type="primary",
+            ):
+                # 确保在自选里
+                if s not in st.session_state.watchlist:
+                    st.session_state.watchlist = _ensure_quick_pins(
+                        list(st.session_state.watchlist) + [s]
+                    )
+                    try:
+                        from views.common import save_watchlist
+
+                        save_watchlist(st.session_state.watchlist)
+                    except Exception:
+                        pass
                 _request_symbol(s, open_sop=True)
                 st.rerun()
+        # 其余自选（不含已显示的 pin，避免重复 key）
+        rest = [s for s in st.session_state.watchlist if s not in pin_syms][:10]
+        if rest:
+            st.caption("自选")
+            cols = st.columns(2)
+            for i, s in enumerate(rest):
+                if cols[i % 2].button(s, key=f"quick_{s}", width="stretch"):
+                    _request_symbol(s, open_sop=True)
+                    st.rerun()
 
-    st.divider()
-    st.caption("本金默认 5万 HKD · 非投资建议")
+        st.divider()
+        st.caption("本金默认 5万 HKD · 非投资建议")
 
 
 symbol = str(st.session_state.get("symbol") or "").strip()
