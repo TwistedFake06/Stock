@@ -6,7 +6,5 @@ scipy>=1.12.0,<2
 plotly>=5.18.0,<7
 requests>=2.31.0
 lightgbm>=4.3
-xgboost>=2.0
 scikit-learn>=1.4
-pandas-ta>=0.3.14b
 joblib>=1.3
