@@ -51,6 +51,7 @@ try:
     from views.technical_page import render_technical
     from views.validation_page import render_strategy_validation
     from views.watchlist_page import render_watchlist
+    from screens.workbench import render_workbench
 except Exception as exc:
     # Friendly page when deps/modules fail (e.g. ran without venv / missing plotly)
     try:
@@ -150,6 +151,7 @@ def _on_symbol_box_change() -> None:
 # 主流程（精简）：日常计划、持仓、扫描与规则验证；其余收进「更多」
 PAGE_MAIN = [
     "投资SOP",
+    "短炒工作台",
     "我已买入",
     "Watchlist扫描",
     "开市超短扫描",
@@ -355,6 +357,8 @@ if not symbol:
 # ---- router ----
 if page == "投资SOP":
     render_sop(symbol, period, interval, period_label, interval_label)
+elif page == "短炒工作台":
+    render_workbench()
 elif page == "我已买入":
     render_hold_page(symbol, period=period, interval=interval)
 elif page == "Watchlist扫描":

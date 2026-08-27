@@ -2,6 +2,27 @@
 
 基于 **Python + Streamlit + Yahoo Finance** 的本地股票分析应用。
 
+## 短炒工作台
+
+`app.py` 側欄的「短炒工作台」提供繁體中文的日線研究流程：今日候選、個股圖表、LightGBM 模型打分及簡易回測。它是本機研究工具，不是券商、不會自動下單，也不是投資建議。
+
+### 啟動
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+Windows 可使用 `.venv\Scripts\activate` 代替 `source`。港股必須使用 Yahoo 格式，例如 `0700.HK`、`9988.HK`。
+
+模型以當日及之前的價格、量能、波動和技術特徵訓練；標籤為 $Close_{t+5}/Close_t - 1 > 0$。訓練採時間前 80% / 後 20% 切分，不隨機打亂日期；模型檔案保存於 `models/`，下次可直接載入。
+
+已知限制：Yahoo Finance 的日線可能延遲或下載失敗；日線不是即市報價；模型會隨市場變化而過時，應定期重訓；交易成本對短線結果影響很大。回測沒有計入完整印花稅、極端滑價或借貨成本。
+
+**免責聲明：本工具只供研究學習，不構成投資建議。**
+
 支持：
 
 - 🇺🇸 美股（如 `AAPL`、`NVDA`）
