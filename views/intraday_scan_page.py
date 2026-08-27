@@ -103,7 +103,7 @@ def render_intraday_scan() -> None:
     progress.empty()
 
     table = pd.DataFrame(rows)
-    rank = {"可做": 3, "等待": 2, "等待下次开市": 1, "不做": 0, "资料不足": -1}
+    rank = {"可做": 4, "等待": 3, "暖机中": 2, "等待下次开市": 1, "不做": 0, "资料不足": -1}
     table["_rank"] = table["状态"].map(rank).fillna(-1)
     table = table.sort_values(["_rank", "分数"], ascending=False).drop(columns="_rank")
 
@@ -114,7 +114,7 @@ def render_intraday_scan() -> None:
     else:
         st.dataframe(tradeable, width="stretch", hide_index=True)
 
-    waiting = table[table["状态"].isin(["等待", "等待下次开市"])]
+    waiting = table[table["状态"].isin(["等待", "暖机中", "等待下次开市"])]
     st.subheader(f"等待条件 · {len(waiting)}")
     if waiting.empty:
         st.caption("目前没有等待确认的标的。")

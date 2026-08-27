@@ -38,12 +38,26 @@ def _hk_bars() -> pd.DataFrame:
 
 def _with_prior_strong_session() -> pd.DataFrame:
     prior = _bars(final_close=104.0)
-    prior["Date"] = pd.date_range("2026-08-24 09:30", periods=24, freq="5min", tz="America/New_York")
+    prior["Date"] = pd.date_range("2026-08-21 09:30", periods=24, freq="5min", tz="America/New_York")
     current = _bars()
     return pd.concat([prior, current], ignore_index=True)
 
 
 class TestOpeningRangeSetup(unittest.TestCase):
+    def test_warmup_reports_remaining_bars_and_eta(self):
+        short = _bars().iloc[:2].copy()
+        setup = analyze_opening_range_setup("NVDA", short)
+        self.assertEqual(setup.verdict, "暖机中")
+        self.assertIn("2/3", setup.reasons[0])
+        self.assertIn("09:40", setup.reasons[0])
+
+    def test_prior_session_seeds_indicators_after_opening_range(self):
+        data = _with_prior_strong_session()
+        first_opening_range = pd.concat([data.iloc[:24], data.iloc[24:27]], ignore_index=True)
+        setup = analyze_opening_range_setup("NVDA", first_opening_range)
+        self.assertNotEqual(setup.verdict, "暖机中")
+        self.assertNotEqual(setup.verdict, "资料不足")
+
     def test_breakout_builds_entry_stop_and_targets(self):
         setup = analyze_opening_range_setup("NVDA", _bars())
         self.assertEqual(setup.verdict, "可做")

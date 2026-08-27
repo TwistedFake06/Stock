@@ -17,7 +17,7 @@ class IntradaySetup:
     symbol: str = ""
     market: str = "US"
     session_label: str = ""
-    verdict: str = "资料不足"  # 可做 | 等待 | 不做 | 资料不足
+    verdict: str = "资料不足"  # 可做 | 等待 | 暖机中 | 不做 | 资料不足
     score: int = 0
     last_price: float | None = None
     entry: float | None = None
@@ -153,31 +153,80 @@ def _add_vwap_and_kdj(data: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _indicator_context(symbol: str, data: pd.DataFrame, current_bars: pd.DataFrame) -> pd.DataFrame:
+    """Seed continuous indicators with the prior completed session.
+
+    Opening range, VWAP, and relative volume must remain current-session only;
+    only rolling/momentum indicators may use the previous session for warm-up.
+    """
+    if current_bars.empty:
+        return current_bars
+    all_bars = _regular_session_bars(symbol, data)
+    current_day = current_bars["_local"].dt.normalize().iloc[0]
+    prior = all_bars[all_bars["_local"].dt.normalize() < current_day].tail(40)
+    return pd.concat([prior, current_bars], ignore_index=True)
+
+
 def analyze_opening_range_setup(symbol: str, data: pd.DataFrame) -> IntradaySetup:
     """Build a 5-minute opening-range long plan from one symbol's intraday bars."""
     market = intraday_market(symbol)
     bars, session_label = _rth_bars(symbol, data)
     prior_label = _prior_session_label(symbol, data, bars)
-    if len(bars) < 20:
+    required_bars = 3  # The first 15 minutes define the opening range.
+    if len(bars) < required_bars:
         market_name = "港股" if market == "HK" else "美股"
+        latest = bars["_local"].iloc[-1] if not bars.empty else None
+        missing = required_bars - len(bars)
+        eta = ""
+        if latest is not None:
+            try:
+                next_ready = latest + pd.Timedelta(minutes=5 * missing)
+                eta = f"预计约 {next_ready.strftime('%H:%M')} 再检查"
+            except Exception:
+                eta = ""
         return IntradaySetup(
             symbol=symbol,
             market=market,
             session_label=session_label,
+            verdict="暖机中" if not bars.empty else "资料不足",
             prior_session_label=prior_label,
-            reasons=[f"本交易时段 5 分钟 K线不足，{market_name}开市后再检查。"],
+            reasons=[
+                (
+                    f"{market_name}本时段已有 {len(bars)}/{required_bars} 根完成 5 分钟K；"
+                    f"首15分钟区间尚未完成，{eta or '稍后再检查'}。"
+                )
+            ],
         )
 
-    bars = add_bollinger(bars)
-    bars = add_rsi(bars)
-    bars = add_macd(bars)
-    bars = _add_vwap_and_kdj(bars)
+    current_count = len(bars)
+    indicator_bars = _indicator_context(symbol, data, bars)
+    indicator_bars = add_bollinger(indicator_bars)
+    indicator_bars = add_rsi(indicator_bars)
+    indicator_bars = add_macd(indicator_bars)
+    indicator_bars = _add_vwap_and_kdj(indicator_bars)
+    context_high = indicator_bars["High"].astype(float)
+    context_low = indicator_bars["Low"].astype(float)
+    context_close = indicator_bars["Close"].astype(float)
+    context_prev_close = context_close.shift(1)
+    context_true_range = pd.concat(
+        [
+            (context_high - context_low).abs(),
+            (context_high - context_prev_close).abs(),
+            (context_low - context_prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    indicator_bars["INTRADAY_ATR"] = context_true_range.rolling(
+        14, min_periods=14
+    ).mean()
+    # Reset VWAP at this session's open; do not blend overnight/previous-day volume.
+    current_vwap = _add_vwap_and_kdj(bars)["VWAP"].reset_index(drop=True)
+    bars = indicator_bars.tail(current_count).reset_index(drop=True)
+    bars["VWAP"] = current_vwap
     high = bars["High"].astype(float)
     low = bars["Low"].astype(float)
     close = bars["Close"].astype(float)
-    prev_close = close.shift(1)
-    true_range = pd.concat([(high - low).abs(), (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
-    atr = float(true_range.rolling(14, min_periods=14).mean().iloc[-1])
+    atr = float(bars["INTRADAY_ATR"].iloc[-1])
     if not pd.notna(atr) or atr <= 0:
         return IntradaySetup(symbol=symbol, market=market, session_label=session_label, prior_session_label=prior_label, reasons=["盘中 ATR 不足，无法计算止损。"])
 
