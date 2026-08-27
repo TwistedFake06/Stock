@@ -31,7 +31,11 @@ def render_screener() -> None:
         st.warning("下載失敗：" + ", ".join(failed))
     scored = score_features(features) if model_available() else pd.DataFrame()
     latest = features.sort_values("Date").groupby("Ticker", as_index=False).tail(1).copy()
-    latest = latest.merge(scored[["Ticker", "score", "signal"]], on="Ticker", how="left") if not scored.empty else latest
+    if not scored.empty:
+        latest = latest.merge(scored[["Ticker", "score", "signal"]], on="Ticker", how="left")
+    else:
+        latest["score"] = pd.NA
+        latest["signal"] = "未訓練"
     latest["名稱"] = latest["Ticker"].map(universe)
     rules = latest[(latest["ret_5"] >= min_ret) & (latest["vol_ratio_20"] >= min_vol) & latest["rsi_14"].between(*rsi_range)]
     if above_ma:
