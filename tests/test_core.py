@@ -19,6 +19,7 @@ from analysis import (
 )
 from indicators import add_rsi
 from options_greeks import calc_spread_greeks
+from options_direction import analyze_direction
 from options_payoff import payoff_per_contract, payoff_per_share
 from options_position import calc_options_position
 from stock_service import normalize_symbol
@@ -99,6 +100,25 @@ class TestPayoffFillVsMid(unittest.TestCase):
         idea = SimpleNamespace(legs=legs)
         # With fill: credit 1.2; with mid would be 2.8
         self.assertAlmostEqual(payoff_per_share(idea, 120.0), 1.2, places=4)
+
+
+class TestOptionsDirection(unittest.TestCase):
+    def test_flat_prices_are_marked_as_range(self):
+        closes = [100.0] * 45
+        data = pd.DataFrame(
+            {
+                "Close": closes,
+                "High": [price + 0.5 for price in closes],
+                "Low": [price - 0.5 for price in closes],
+            }
+        )
+
+        report = analyze_direction(data)
+
+        self.assertEqual(report.direction, "中性")
+        self.assertEqual(report.market_regime, "震荡")
+        self.assertLess(report.range_low, report.range_high)
+        self.assertIsNotNone(report.range_position)
 
 
 class TestGreeksBySide(unittest.TestCase):

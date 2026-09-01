@@ -11,7 +11,7 @@ and existing call sites.
 
 from __future__ import annotations
 
-from options_analyze import analyze_options_spreads
+from options_analyze import analyze_options_spreads, select_credit_candidates
 from options_builders import (
     build_bear_call,
     build_bear_put,
@@ -74,6 +74,7 @@ from options_scoring import (
     estimate_vertical_win_rates,
     score_liquidity,
 )
+from options_strategy_book import build_strategy_comparison
 from options_timing import SpreadTimingReport, assess_spread_timing
 
 __all__ = [
@@ -87,6 +88,8 @@ __all__ = [
     "options_symbol",
     "analyze_direction",
     "analyze_options_spreads",
+    "select_credit_candidates",
+    "build_strategy_comparison",
     "assess_spread_timing",
     "SpreadTimingReport",
     "build_bull_put",

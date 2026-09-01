@@ -34,6 +34,40 @@ from options_models import (
 from options_scoring import _attach_win_rates, score_liquidity
 
 
+def select_credit_candidates(
+    ideas: list[SpreadIdea], direction: str
+) -> list[SpreadIdea]:
+    """Return the strongest OTM credit vertical(s) for the market direction.
+
+    A range has no defensible single side: expose both the put and call credit
+    candidates.  A directional market keeps only the credit side consistent
+    with its trend; debit verticals are deliberately excluded here.
+    """
+    desired_codes = {
+        "看多": ["bull_put"],
+        "看空": ["bear_call"],
+        "中性": ["bull_put", "bear_call"],
+    }.get(direction, ["bull_put", "bear_call"])
+
+    def quality(idea: SpreadIdea) -> tuple[float, float, float]:
+        return (
+            float(getattr(idea, "playbook_combo", idea.score) or idea.score),
+            float(idea.score),
+            float(getattr(idea, "win_rate_profit", idea.pop_est) or 0.0),
+        )
+
+    candidates: list[SpreadIdea] = []
+    for code in desired_codes:
+        matches = [
+            idea
+            for idea in ideas
+            if idea.code == code and idea.structure == "Credit Vertical"
+        ]
+        if matches:
+            candidates.append(max(matches, key=quality))
+    return candidates
+
+
 def analyze_options_spreads(
     symbol: str,
     target_dte: int = 30,
@@ -294,8 +328,9 @@ def analyze_options_spreads(
     # 参考市面常见策略规则 → 最佳 / 高赢面
     best_playbook = best_playbook_wr = None
     playbook_table: list = []
+    strategy_comparison: list = []
     try:
-        from options_strategy_book import apply_playbook_ranking
+        from options_strategy_book import apply_playbook_ranking, build_strategy_comparison
 
         best_playbook, best_playbook_wr, playbook_table = apply_playbook_ranking(
             ideas, spot, dte, direction.direction
@@ -308,8 +343,12 @@ def analyze_options_spreads(
         )
         if best_playbook is not None:
             best = best_playbook
+        strategy_comparison = build_strategy_comparison(ideas, spot, dte, direction.direction)
     except Exception:
         playbook_table = []
+        strategy_comparison = []
+
+    credit_candidates = select_credit_candidates(ideas, direction.direction)
 
     if best_winrate:
         for i, idea in enumerate(sorted(with_wr, key=_wr, reverse=True), start=1):
@@ -511,7 +550,9 @@ def analyze_options_spreads(
         best_winrate_aligned=best_winrate_aligned,
         best_playbook=best_playbook,
         best_playbook_wr=best_playbook_wr,
+        credit_candidates=credit_candidates,
         playbook_table=playbook_table,
+        strategy_comparison=strategy_comparison,
         regime=regime,
         summary=summary,
         action_plan=action_plan,

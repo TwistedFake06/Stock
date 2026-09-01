@@ -40,6 +40,10 @@ class DirectionReport:
     reasons: list[str] = field(default_factory=list)
     summary: str = ""
     style_hint: str = ""  # 偏信用价差 | 偏借方价差 | 观望
+    market_regime: str = "未知"  # 震荡 | 趋势 | 未知
+    range_low: float | None = None  # 最近区间下缘，仅供 OTM 风险参考
+    range_high: float | None = None  # 最近区间上缘，仅供 OTM 风险参考
+    range_position: float | None = None  # 现价在区间的位置：0=下缘，1=上缘
 
 
 @dataclass
@@ -143,7 +147,9 @@ class OptionsReport:
     best_winrate_aligned: SpreadIdea | None = None  # 与方向契合的最高胜率
     best_playbook: SpreadIdea | None = None  # 贴合常见实战策略
     best_playbook_wr: SpreadIdea | None = None  # 实战规则下最高赢面
+    credit_candidates: list[SpreadIdea] = field(default_factory=list)  # 市况对应 OTM 收权利金候选
     playbook_table: list = field(default_factory=list)
+    strategy_comparison: list[dict[str, Any]] = field(default_factory=list)
     regime: str = "—"
     summary: str = ""
     action_plan: list[str] = field(default_factory=list)

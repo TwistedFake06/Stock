@@ -17,6 +17,7 @@ def analyze_direction(df: pd.DataFrame) -> DirectionReport:
             reasons=["K线不足，默认中性"],
             summary="数据不足，方向按中性处理。",
             style_hint="观望或极小仓信用价差",
+            market_regime="未知",
         )
 
     data = enrich(df)
@@ -57,9 +58,11 @@ def analyze_direction(df: pd.DataFrame) -> DirectionReport:
     if sma5 > sma20:
         score += 10
         reasons.append("SMA5 > SMA20（短线偏多）")
-    else:
+    elif sma5 < sma20:
         score -= 10
         reasons.append("SMA5 < SMA20（短线偏空）")
+    else:
+        reasons.append("SMA5 与 SMA20 持平（短线中性）")
 
     # Momentum 5/20d
     if len(close) >= 6:
@@ -111,6 +114,16 @@ def analyze_direction(df: pd.DataFrame) -> DirectionReport:
 
     score = float(max(-100.0, min(100.0, score)))
 
+    # Use the latest 20 sessions as a practical range reference.  It does not
+    # predict support/resistance; it only makes the OTM credit-side decision
+    # explicit when the trend score is neutral.
+    recent = data.tail(20)
+    range_low = float(recent["Low"].min()) if "Low" in recent.columns else float(close.tail(20).min())
+    range_high = float(recent["High"].max()) if "High" in recent.columns else float(close.tail(20).max())
+    range_span = range_high - range_low
+    range_position = (last - range_low) / range_span if range_span > 0 else 0.5
+    range_position = float(max(0.0, min(1.0, range_position)))
+
     if score >= 25:
         direction = "看多"
         preferred = ["bull_put", "bull_call"]  # credit first if mild, debit if strong
@@ -130,7 +143,10 @@ def analyze_direction(df: pd.DataFrame) -> DirectionReport:
     else:
         direction = "中性"
         preferred = ["bull_put", "bear_call"]
-        style = "方向不明：若交易，两侧信用价差均可，仓位宜小；避免重仓 debit"
+        style = (
+            f"震荡区间约 {range_low:.1f}–{range_high:.1f}：下缘有支撑才卖 OTM Put，"
+            "上缘有压力才卖 OTM Call；不确定时观望，避免重仓 debit"
+        )
 
     abs_s = abs(score)
     strength = "强" if abs_s >= 45 else "中" if abs_s >= 25 else "弱"
@@ -146,4 +162,8 @@ def analyze_direction(df: pd.DataFrame) -> DirectionReport:
         reasons=reasons,
         summary=summary,
         style_hint=style,
+        market_regime="震荡" if direction == "中性" else "趋势",
+        range_low=round(range_low, 2),
+        range_high=round(range_high, 2),
+        range_position=round(range_position, 2),
     )

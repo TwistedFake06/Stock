@@ -351,3 +351,65 @@ def apply_playbook_ranking(
             }
         )
     return best_play, best_wr, table
+
+
+def build_strategy_comparison(
+    ideas: list[Any], spot: float, dte: int, direction: str
+) -> list[dict[str, Any]]:
+    """Compare the best current candidate for each common strategy style.
+
+    POP and EV are model estimates from this app's current option chain, not
+    externally verified historical win rates for a named trading service.
+    """
+    rows: list[dict[str, Any]] = []
+    for style in STRATEGY_BOOK:
+        matches: list[tuple[float, Any]] = []
+        for idea in ideas:
+            style_match = next(
+                (match for match in match_styles(idea, spot, dte, direction) if match.style.id == style.id),
+                None,
+            )
+            if style_match is not None:
+                matches.append((style_match.fit_score, idea))
+        if not matches:
+            rows.append(
+                {
+                    "常见做法": style.name_zh,
+                    "规则目标": style.plain,
+                    "当前候选": "当前无合格候选",
+                    "POP%": None,
+                    "最多赚$/张": None,
+                    "最多亏$/张": None,
+                }
+            )
+            continue
+
+        fit, idea = max(
+            matches,
+            key=lambda pair: (
+                pair[0],
+                float(getattr(pair[1], "win_rate_profit", pair[1].pop_est) or 0.0),
+                float(getattr(pair[1], "liquidity_score", 0.0) or 0.0),
+            ),
+        )
+        short_otm = _short_otm_pct(idea, spot)
+        premium = idea.net_credit if idea.net_credit is not None else idea.net_debit
+        rows.append(
+            {
+                "常见做法": style.name_zh,
+                "规则目标": style.plain,
+                "当前候选": idea.name,
+                "贴合分": round(fit, 1),
+                "短腿OTM%": round(short_otm * 100, 1) if short_otm is not None else None,
+                "价宽": idea.width,
+                "净收$" if idea.net_credit is not None else "净付$": premium,
+                "POP%": getattr(idea, "win_rate_profit", None) or idea.pop_est,
+                "到期EV$/张": getattr(idea, "expected_value", None),
+                "管理EV$/张": getattr(idea, "expected_value_managed", None),
+                "最多赚$/张": idea.max_profit,
+                "最多亏$/张": idea.max_loss,
+                "流动性": getattr(idea, "liquidity_label", "—") or "—",
+                "参考规则": style.source_note,
+            }
+        )
+    return rows

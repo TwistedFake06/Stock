@@ -11,6 +11,7 @@ from options_greeks import calc_spread_greeks
 from options_payoff import (
     build_daily_mark_calendar,
     build_payoff_ladder,
+    payoff_per_contract,
     payoff_zones_summary,
 )
 from options_plain import plain_spread_steps
@@ -260,6 +261,48 @@ def render_options(symbol: str) -> None:
             pb = getattr(opt_rep, "best_playbook", None) or opt_rep.best
             pb_wr = getattr(opt_rep, "best_playbook_wr", None) or hi_al or hi
             best = pb
+            credit_candidates = list(getattr(opt_rep, "credit_candidates", None) or [])
+            is_range_market = bool(d and getattr(d, "market_regime", "") == "震荡")
+
+            if is_range_market:
+                st.markdown("### 震荡市：先选要卖哪一侧的风险")
+                if d.range_low is not None and d.range_high is not None:
+                    st.caption(
+                        f"近 20 日参考区间：{d.range_low:.2f} - {d.range_high:.2f}。"
+                        "靠近下缘且下方有支撑，比较 OTM 卖 Put；靠近上缘且上方有压力，比较 OTM 卖 Call。"
+                        "两侧都不清楚时不做，不把双侧风险当成单一仓位。"
+                    )
+
+                if credit_candidates:
+                    candidate_cols = st.columns(len(credit_candidates))
+                    for column, candidate in zip(candidate_cols, credit_candidates):
+                        with column:
+                            side = "OTM 卖 Put" if candidate.code == "bull_put" else "OTM 卖 Call"
+                            pop = getattr(candidate, "win_rate_profit", None)
+                            st.markdown(f"**{side}**")
+                            st.caption(candidate.name)
+                            st.metric("短腿 OTM", candidate.otm_label or "-" )
+                            st.metric("价宽 / 最大风险", f"${candidate.width:.0f} / ${candidate.max_loss:.0f}")
+                            st.caption(
+                                f"净收 ${candidate.net_credit:.2f}/股 · POP "
+                                f"{f'{pop:.0f}%' if pop is not None else '-'}"
+                            )
+
+                    selected_credit_index = st.radio(
+                        "这次要看哪一侧？",
+                        options=list(range(len(credit_candidates))),
+                        horizontal=True,
+                        format_func=lambda index: (
+                            "卖 OTM Put（偏多 / 守区间下缘）"
+                            if credit_candidates[index].code == "bull_put"
+                            else "卖 OTM Call（偏空 / 守区间上缘）"
+                        ),
+                        key="opt_range_side",
+                    )
+                    best = credit_candidates[selected_credit_index]
+                else:
+                    st.warning("震荡市未找到可成交的 OTM 信用价差；等待盘中报价或改选到期日。")
+
             is_credit = best.net_credit is not None
             do_word = "卖出价差 · 先收钱" if is_credit else "买进价差 · 先付钱"
             close_word = "几天后买回" if is_credit else "几天后卖出"
@@ -534,6 +577,24 @@ def render_options(symbol: str) -> None:
                             legs_to_frame(pb_wr), width="stretch", hide_index=True
                         )
 
+            strategy_comparison = getattr(opt_rep, "strategy_comparison", None) or []
+            if strategy_comparison:
+                st.markdown("### 跟坊间常见做法比一比")
+                st.caption(
+                    "公平口径：所有数字都取自同一到期日、当前期权链、IV 与自然成交（卖=bid / 买=ask）。"
+                    "POP 与 EV 是本工具模型估算，不是任何教学平台的历史保证胜率。"
+                )
+                st.dataframe(
+                    pd.DataFrame(strategy_comparison),
+                    width="stretch",
+                    height=330,
+                    hide_index=True,
+                )
+                st.info(
+                    "看法：高 POP 往往以较低的最大利润/风险报酬作交换；"
+                    "比较时先确保最大亏损符合 1R，再看流动性、OTM 距离、EV 与管理计划。"
+                )
+
             ptable = getattr(opt_rep, "playbook_table", None) or []
             if ptable:
                 with st.expander("策略排行榜（可滚）", expanded=False):
@@ -563,7 +624,12 @@ def render_options(symbol: str) -> None:
                 unsafe_allow_html=True,
             )
 
-            payoff_choices = {"系统建议": best}
+            payoff_choices = {"目前选择": best}
+            for candidate in credit_candidates:
+                if candidate is best:
+                    continue
+                side = "卖 OTM Put" if candidate.code == "bull_put" else "卖 OTM Call"
+                payoff_choices[f"比较：{side}"] = candidate
             if hi is not None:
                 payoff_choices["赢面最高"] = hi
             if hi_al is not None and hi_al is not hi:
@@ -586,6 +652,27 @@ def render_options(symbol: str) -> None:
             z1.metric("股价不变到期", f"${zones['spot_pnl']:.0f}/张")
             z2.metric("最多赚", f"${zones['max_profit']:.0f}/张")
             z3.metric("最多亏", f"${zones['max_loss']:.0f}/张")
+
+            strike_prices = sorted({float(leg.strike) for leg in pay_idea.legs})
+            key_prices = sorted({spot_px, *strike_prices, *(pay_idea.breakevens or [])})
+            strike_payoffs = pd.DataFrame(
+                [
+                    {
+                        "到期标的价": round(price, 2),
+                        "位置": (
+                            "现价"
+                            if abs(price - spot_px) < 0.01
+                            else "打和点"
+                            if any(abs(price - be) < 0.01 for be in (pay_idea.breakevens or []))
+                            else "履约价"
+                        ),
+                        "到期赚亏$/张": round(payoff_per_contract(pay_idea, price), 2),
+                    }
+                    for price in key_prices
+                ]
+            )
+            st.markdown("**关键履约价：每张到期赚 / 蚀**")
+            st.dataframe(strike_payoffs, width="stretch", hide_index=True)
 
             ladder = build_payoff_ladder(pay_idea, spot_px).rename(
                 columns={

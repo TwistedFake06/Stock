@@ -17,7 +17,9 @@ from options_spreads import (
     estimate_vertical_win_rates,
     half_profit_close_price,
     passes_hard_filters,
+    select_credit_candidates,
 )
+from options_strategy_book import build_strategy_comparison
 
 
 def _quote_row(strike: float, mid: float, oi: int = 2000) -> dict:
@@ -212,6 +214,51 @@ class TestWinRatesAndFilters(unittest.TestCase):
             liquidity_label="很差",
         )
         self.assertFalse(passes_hard_filters(idea))
+
+
+class TestCreditCandidateSelection(unittest.TestCase):
+    def test_range_keeps_best_put_and_call_credit_candidates(self):
+        puts = _chain_puts()
+        calls = _chain_calls()
+        bull_put = build_bull_put(puts, spot=100, width=5, otm_pct=0.03, expiry="2099-01-01", dte=30)
+        bear_call = build_bear_call(calls, spot=100, width=5, otm_pct=0.03, expiry="2099-01-01", dte=30)
+        assert bull_put is not None and bear_call is not None
+        bull_put.score = 70
+        bear_call.score = 80
+
+        candidates = select_credit_candidates([bull_put, bear_call], "中性")
+
+        self.assertEqual([idea.code for idea in candidates], ["bull_put", "bear_call"])
+
+    def test_directional_market_keeps_matching_credit_side(self):
+        bull_put = build_bull_put(_chain_puts(), spot=100, width=5, otm_pct=0.03, expiry="2099-01-01", dte=30)
+        bear_call = build_bear_call(_chain_calls(), spot=100, width=5, otm_pct=0.03, expiry="2099-01-01", dte=30)
+        assert bull_put is not None and bear_call is not None
+
+        candidates = select_credit_candidates([bull_put, bear_call], "看空")
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].code, "bear_call")
+
+
+class TestStrategyComparison(unittest.TestCase):
+    def test_comparison_lists_current_candidate_metrics(self):
+        bull_put = build_bull_put(_chain_puts(), spot=100, width=5, otm_pct=0.03, expiry="2099-01-01", dte=30)
+        bear_call = build_bear_call(_chain_calls(), spot=100, width=5, otm_pct=0.03, expiry="2099-01-01", dte=30)
+        assert bull_put is not None and bear_call is not None
+        for idea in (bull_put, bear_call):
+            idea.win_rate_profit = 70.0
+            idea.expected_value = 15.0
+            idea.expected_value_managed = 20.0
+            idea.liquidity_label = "高"
+            idea.liquidity_score = 80.0
+
+        rows = build_strategy_comparison([bull_put, bear_call], spot=100, dte=30, direction="中性")
+
+        high_pop = next(row for row in rows if row["常见做法"] == "高胜率收钱价差")
+        self.assertNotEqual(high_pop["当前候选"], "当前无合格候选")
+        self.assertEqual(high_pop["POP%"], 70.0)
+        self.assertIn("最多亏$/张", high_pop)
 
 
 if __name__ == "__main__":
