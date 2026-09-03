@@ -156,6 +156,7 @@ PAGE_MAIN = [
     "Watchlist扫描",
     "开市超短扫描",
     "策略验证",
+    "期权价差",
     "更多…",
 ]
 PAGE_MORE = [
@@ -166,7 +167,6 @@ PAGE_MORE = [
     "技术分析",
     "多股对比",
     "自选股",
-    "期权价差",
 ]
 PAGE_OPTIONS = PAGE_MAIN + PAGE_MORE  # 兼容旧 session 值
 
@@ -210,6 +210,10 @@ if "nav_more" not in st.session_state:
     st.session_state.nav_more = PAGE_MORE[0]
 
 # 旧 session 若停在「更多」子页，主选择框映射为「更多…」
+# 「期权价差」已升到主菜单：从更多里点过来的旧状态直接打开该页
+if st.session_state.get("nav_more") == "期权价差":
+    st.session_state.nav_page = "期权价差"
+    st.session_state.nav_more = PAGE_MORE[0]
 _raw_nav = st.session_state.get("nav_page", "投资SOP")
 if _raw_nav in PAGE_MORE:
     st.session_state.nav_more = _raw_nav
