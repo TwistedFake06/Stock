@@ -9,6 +9,7 @@ Streamlit Cloud / 本地入口固定为本文件；页面实现在 views/（勿�
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 from pathlib import Path
 
@@ -275,6 +276,74 @@ with st.sidebar:
 
         st.caption(f"SOP build: `{_SOP_BUILD}`")
         st.caption("Cloud 须与本地同一 build；不同=未部署最新代码")
+        with st.expander("Telegram 通知", expanded=False):
+            st.caption(
+                "网页填 token **不会自动推送**。要收到入場/超短 alert，须："
+                "① 这里保存或写 `.env` ② 电脑开着跑 `run_alert.bat`。"
+            )
+            try:
+                from telegram_notify import (
+                    load_telegram_creds,
+                    send_telegram,
+                    telegram_configured,
+                    upsert_dotenv,
+                )
+
+                tok0, chat0 = load_telegram_creds()
+                st.caption(
+                    "目前："
+                    + ("已配置 token+chat" if telegram_configured() else "未配置（.env 是空的）")
+                )
+                tg_token = st.text_input(
+                    "Bot token",
+                    value="" if not tok0 else tok0,
+                    type="password",
+                    key="tg_token_in",
+                    help="@BotFather 的 token",
+                )
+                tg_chat = st.text_input(
+                    "Chat ID",
+                    value="" if not chat0 else str(chat0),
+                    key="tg_chat_in",
+                    help="先给 bot 发一条消息，再从 getUpdates 复制 chat.id",
+                )
+                c_save, c_test = st.columns(2)
+                with c_save:
+                    if st.button("保存到 .env", width="stretch", key="tg_save"):
+                        t, c = (tg_token or "").strip(), (tg_chat or "").strip()
+                        if not t or not c:
+                            st.error("token 和 chat id 都要填")
+                        else:
+                            try:
+                                upsert_dotenv(
+                                    {
+                                        "TELEGRAM_BOT_TOKEN": t,
+                                        "TELEGRAM_CHAT_ID": c,
+                                    }
+                                )
+                                os.environ["TELEGRAM_BOT_TOKEN"] = t
+                                os.environ["TELEGRAM_CHAT_ID"] = c
+                                st.success("已写入项目 .env（不会进 git）")
+                            except OSError as exc:
+                                st.error(f"无法写 .env（Cloud 常只读）：{exc}")
+                                st.info("请改用本机 .env，或 Streamlit Cloud → Settings → Secrets")
+                with c_test:
+                    if st.button("发送测试", width="stretch", key="tg_test"):
+                        t, c = (tg_token or tok0 or "").strip(), (tg_chat or str(chat0) or "").strip()
+                        if t:
+                            os.environ["TELEGRAM_BOT_TOKEN"] = t
+                        if c:
+                            os.environ["TELEGRAM_CHAT_ID"] = c
+                        ok, msg = send_telegram(
+                            "Dashboard 测试通知：Telegram 已接通。\n"
+                            "日常 alert 仍需运行 run_alert.bat。"
+                        )
+                        if ok:
+                            st.success("已发送，请看 Telegram")
+                        else:
+                            st.error(msg)
+            except Exception as exc:
+                st.caption(f"通知模块不可用：{exc}")
         with st.expander("v1 定版 · 怎么用（别再加指标）", expanded=False):
             st.markdown(
                 """

@@ -57,6 +57,10 @@ def _load_local_env_once() -> None:
         "FRED_KEY",
         "FINNHUB_API_KEY",
         "FINNHUB_KEY",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_CHAT_ID",
+        "TG_BOT_TOKEN",
+        "TG_CHAT_ID",
     )
 
     # Streamlit Cloud / local streamlit secrets.toml

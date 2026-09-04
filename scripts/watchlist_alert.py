@@ -173,6 +173,12 @@ def _format_intraday_alert(setup: IntradaySetup) -> str:
 
 
 def send_telegram(text: str) -> tuple[bool, str]:
+    try:
+        from telegram_notify import send_telegram as _send
+
+        return _send(text)
+    except Exception:
+        pass
     token = (
         os.environ.get("TELEGRAM_BOT_TOKEN")
         or os.environ.get("TG_BOT_TOKEN")
@@ -465,10 +471,15 @@ def main() -> None:
     capital_usd = float(args.capital_hkd) / float(args.hkd_per_usd)
 
     # Channel check
-    has_tg = bool(
-        (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
-        and (os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
-    )
+    try:
+        from telegram_notify import telegram_configured
+
+        has_tg = telegram_configured()
+    except Exception:
+        has_tg = bool(
+            (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
+            and (os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
+        )
     has_wh = bool((os.environ.get("ALERT_WEBHOOK_URL") or "").strip())
     print(f"通知渠道: Telegram={'ON' if has_tg else 'OFF'}  Webhook={'ON' if has_wh else 'OFF'}")
     if not has_tg and not has_wh and not args.dry_run:
