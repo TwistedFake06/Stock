@@ -424,3 +424,8 @@ def cache_bucket(minutes: int = 5) -> str:
         microseconds=now.microsecond,
     )
     return bucket.isoformat()
+
+try:
+    from config import CORE_WATCHLIST as CORE_WATCHLIST
+except Exception:
+    CORE_WATCHLIST = ["MRVL", "HOOD", "GOOGL", "SNDK", "MU", "AAPL", "VRT", "PLTR", "AMD", "ARM", "LITE", "UNH", "SMH", "ASML"]

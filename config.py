@@ -26,3 +26,21 @@ MODEL_DIR = "models"
 MODEL_FILE = f"{MODEL_DIR}/lgbm_fwd5_clf.joblib"
 FEATURE_FILE = f"{MODEL_DIR}/feature_list.json"
 METRICS_FILE = f"{MODEL_DIR}/metrics.json"
+
+# Hist-validated high win-rate core (trade only these for Confirm)
+CORE_WATCHLIST = [
+    "MRVL",
+    "HOOD",
+    "GOOGL",
+    "SNDK",
+    "MU",
+    "AAPL",
+    "VRT",
+    "PLTR",
+    "AMD",
+    "ARM",
+    "LITE",
+    "UNH",
+    "SMH",
+    "ASML",
+]

@@ -7,6 +7,10 @@ import pandas as pd
 import streamlit as st
 
 from stock_service import DEFAULT_WATCHLIST, normalize_symbol
+try:
+    from config import CORE_WATCHLIST
+except Exception:
+    CORE_WATCHLIST = ["MRVL", "HOOD", "GOOGL", "SNDK", "MU", "AAPL", "VRT", "PLTR", "AMD"]
 from mtf_signals import analyze_h1_trigger
 from scripts.backtest_watchlist_swing import backtest_symbol, summarize_history
 from trade_journal import journal_stats
@@ -55,17 +59,96 @@ def _parse_text(raw: str) -> list[str]:
     return out
 
 
+
+
+def _light_zh(x: str) -> str:
+    return {"green": "綠", "yellow": "黃", "red": "紅"}.get(x or "", "—")
+
+
+def _screen_layer(enter_ok: str, *, any_red: bool, any_yellow: bool = False) -> str:
+    """Map SOP verdict to Early Alert vs Confirm screening layer."""
+    # Confirm: full entry + no red/yellow (playbook: yellow => trial max)
+    if enter_ok == "适合入场" and not any_red and not any_yellow:
+        return "Confirm"
+    if enter_ok in ("适合入场", "谨慎试仓"):
+        return "Early"
+    if enter_ok == "观望":
+        return "觀察"
+    return "回避"
+
+def _distance_to_entry(last, lo, hi) -> tuple[float | None, str]:
+    try:
+        last_f = float(last)
+        lo_f = float(lo)
+        hi_f = float(hi)
+    except (TypeError, ValueError):
+        return None, "—"
+    if not (last_f > 0 and lo_f > 0 and hi_f > 0):
+        return None, "—"
+    if lo_f > hi_f:
+        lo_f, hi_f = hi_f, lo_f
+    if lo_f <= last_f <= hi_f:
+        return 0.0, "已在區內"
+    if last_f < lo_f:
+        pct = (lo_f - last_f) / last_f * 100.0
+        return pct, f"差 {pct:.1f}%"
+    pct = (last_f - hi_f) / last_f * 100.0
+    return pct, f"高出 {pct:.1f}%"
+
+
+def _block_reasons(sop, h1_trigger) -> str:
+    reasons: list[str] = []
+    for light, label in (
+        (getattr(sop, "position_light", ""), "位置紅"),
+        (getattr(sop, "wr_light", ""), "勝率紅"),
+        (getattr(sop, "rr_light", ""), "劃算紅"),
+    ):
+        if light == "red":
+            reasons.append(label)
+    days = getattr(sop, "earnings_days_left", None)
+    if getattr(sop, "earnings_soon", False):
+        if days is not None:
+            reasons.append(f"財報{int(days)}天")
+        else:
+            reasons.append("財報臨近")
+    if getattr(sop, "iv_high_event", False):
+        reasons.append("IV事件")
+    if getattr(sop, "false_break_risk", False):
+        reasons.append("假突破")
+    if getattr(sop, "against_trend", False):
+        reasons.append("逆勢")
+    # 1H extreme / not ready when we asked for trigger
+    if h1_trigger is not None and not getattr(h1_trigger, "ready", False):
+        label = getattr(h1_trigger, "label", "") or ""
+        if label and label not in ("—", "-"):
+            reasons.append(f"1H:{label}")
+        else:
+            reasons.append("1H未就緒")
+    return " · ".join(reasons) if reasons else ""
+
+
 def render_scan(period: str, interval: str, period_label: str) -> None:
     st.markdown("## Watchlist 掃描")
     st.caption(
-        f"掃全部 · 先看 **結論 + 三燈 + 掛單/止蝕/目標** · {period_label} · "
-        "與投資SOP同源 · 非投資建議"
+        f"從 list 篩值得買 · 先看 **層級（Confirm／Early）+ 三燈 + 掛單／止蝕／離入場** · "
+        f"{period_label} · 有興趣再撳「開投資SOP」確認 · 非投資建議"
+    )
+    st.info(
+        "目標：高勝率 · 每月數次 · 只喺開市頭 2 小時掛單／買賣。　"
+        "預設 **核心 14 隻 + 只 Confirm**。　"
+        "**Confirm** = 三燈無紅無黃可限價掛 E　｜　**Early** = 觀察／試倉，先入 SOP。"
     )
     scan_simple = st.toggle(
         "掃描極簡表（推荐）",
         value=bool(st.session_state.get("scan_simple_mode", True)),
         key="scan_simple_mode",
         help="开启只显示决策列；关闭显示更多栏位",
+    )
+    core_only = st.toggle(
+        "只掃核心高勝率名單",
+        value=bool(st.session_state.get("scan_core_only", True)),
+        key="scan_core_only",
+        help="MRVL / HOOD / GOOGL / SNDK / MU / AAPL / VRT / PLTR / AMD / ARM / LITE / UNH / SMH / ASML",
     )
 
     # ---- list source ----
@@ -80,7 +163,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
             "清單來源",
             ["編輯下方文字", "App 自選股", "預設 DEFAULT_WATCHLIST"],
             horizontal=True,
-            index=0,
+            index=1,
             key="scan_list_src",
         )
         text = st.text_area(
@@ -123,9 +206,10 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         with c5:
             min_level = st.selectbox(
                 "顯示級別",
-                ["适合+谨慎", "仅适合入场", "全部"],
+                ["只 Confirm", "Confirm+Early", "适合+谨慎", "全部"],
                 index=0,
                 key="scan_min_level",
+                help="預設只顯示 Confirm（高勝率）；可改睇 Early 或全部",
             )
         save_list = st.checkbox("寫入 scan 檔", value=True, key="scan_save_list")
 
@@ -138,13 +222,13 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         )
 
     # 未打开 expander 时用 session / 默认，避免 NameError
-    src = st.session_state.get("scan_list_src", "編輯下方文字")
+    src = st.session_state.get("scan_list_src", "App 自選股")
     text = st.session_state.get("scan_list_text", default_text)
     capital_hkd = float(st.session_state.get("scan_capital_hkd", 50000.0))
     risk_pct = float(st.session_state.get("scan_risk", 1.0))
     horizon_ui = st.session_state.get("scan_horizon", "0–2周")
     mode_ui = st.session_state.get("scan_mode_ui", "A 防守版")
-    min_level = st.session_state.get("scan_min_level", "适合+谨慎")
+    min_level = st.session_state.get("scan_min_level", "只 Confirm")
     save_list = bool(st.session_state.get("scan_save_list", True))
     HKD_PER_USD = 7.8
     capital = float(capital_hkd) / HKD_PER_USD
@@ -170,7 +254,15 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     else:
         symbols = _parse_text(text)
 
-    st.caption(f"將掃描 **{len(symbols)}** 隻：{', '.join(symbols[:12])}{'…' if len(symbols) > 12 else ''}")
+    # High-WR default: restrict to CORE_WATCHLIST
+    core_only = bool(st.session_state.get("scan_core_only", True))
+    if core_only:
+        core_set = {normalize_symbol(s) for s in CORE_WATCHLIST}
+        symbols = [s for s in symbols if normalize_symbol(s) in core_set]
+        if not symbols:
+            symbols = [normalize_symbol(s) for s in CORE_WATCHLIST]
+
+    st.caption(f"將掃描 **{len(symbols)}** 隻：{', '.join(symbols[:12])}{'…' if len(symbols) > 12 else ''}" + (" · 核心高勝率" if core_only else ""))
 
     if history_run and not symbols:
         st.warning("清單係空嘅，無法計算歷史統計。")
@@ -362,21 +454,33 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                             getattr(h2, "win_rate_samples", None) if h2 else None,
                         )
                     )
-                    def _lg(x: str) -> str:
-                        return {"green": "绿", "yellow": "黄", "red": "红"}.get(
-                            x or "", "—"
-                        )
+                    pos_l = getattr(sop, "position_light", "") or ""
+                    wr_l = getattr(sop, "wr_light", "") or ""
+                    rr_l = getattr(sop, "rr_light", "") or ""
+                    any_red = "red" in (pos_l, wr_l, rr_l)
+                    any_yellow = "yellow" in (pos_l, wr_l, rr_l)
+                    layer = _screen_layer(
+                        sop.enter_ok, any_red=any_red, any_yellow=any_yellow
+                    )
+                    dist_pct, dist_label = _distance_to_entry(
+                        sop.last_price, sop.entry_low, sop.entry_high
+                    )
+                    block = _block_reasons(sop, h1_trigger)
 
                     rows_all.append(
                         {
                             "代码": sop.symbol,
                             "名称": sop.name,
                             "模式": getattr(sop, "mode_label", mode_ui),
+                            "层級": layer,
                             "结论": sop.enter_ok,
                             "主结论": getattr(prim, "verdict", "—") if prim else "—",
-                            "位置灯": _lg(getattr(sop, "position_light", "")),
-                            "胜率灯": _lg(getattr(sop, "wr_light", "")),
-                            "划算灯": _lg(getattr(sop, "rr_light", "")),
+                            "位置灯": _light_zh(pos_l),
+                            "胜率灯": _light_zh(wr_l),
+                            "划算灯": _light_zh(rr_l),
+                            "离入場%": dist_pct,
+                            "离入場": dist_label,
+                            "阻擋": block,
                             "一句话": getattr(sop, "one_liner_reason", "") or "",
                             "赚到目标HKD": getattr(sop, "pnl_if_win_hkd", None),
                             "止损亏HKD": getattr(sop, "pnl_if_loss_hkd", None),
@@ -473,6 +577,29 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         st.warning("無結果。")
         return
 
+    for row in rows_all:
+        if "层級" not in row:
+            enter = row.get("结论") or ""
+            lights = (row.get("位置灯"), row.get("胜率灯"), row.get("划算灯"))
+            any_red = any(x in ("紅", "红") for x in lights)
+            if enter == "适合入场" and not any_red:
+                row["层級"] = "Confirm"
+            elif enter in ("适合入场", "谨慎试仓"):
+                row["层級"] = "Early"
+            elif enter == "观望":
+                row["层級"] = "觀察"
+            else:
+                row["层級"] = "回避"
+        if "离入場" not in row or "离入場%" not in row:
+            pct, label = _distance_to_entry(
+                row.get("现价"),
+                row.get("入場低", row.get("入场低")),
+                row.get("入場高", row.get("入场高")),
+            )
+            row["离入場%"] = pct
+            row["离入場"] = label
+        row.setdefault("阻擋", "")
+
     df = pd.DataFrame(rows_all)
 
     if history_rows and history_matches:
@@ -504,8 +631,16 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         history_avg_r = pd.to_numeric(df.get("歷史平均R"), errors="coerce")
         df["_hist_rank"] = history_avg_r.where(history_samples >= 5)
 
-    # filter
-    if min_level == "仅适合入场":
+    # filter (default: Confirm only for high WR)
+    if min_level == "只 Confirm":
+        show = df[df["层級"] == "Confirm"] if "层級" in df.columns else df[df["结论"] == "适合入场"]
+    elif min_level == "Confirm+Early":
+        show = (
+            df[df["层級"].isin(["Confirm", "Early"])]
+            if "层級" in df.columns
+            else df[df["结论"].isin(["适合入场", "谨慎试仓"])]
+        )
+    elif min_level == "仅适合入场":
         show = df[df["结论"] == "适合入场"]
     elif min_level == "适合+谨慎":
         show = df[df["结论"].isin(["适合入场", "谨慎试仓"])]
@@ -541,6 +676,8 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
 
     # summary metrics
     n_all = len(df)
+    n_confirm = int((df["层級"] == "Confirm").sum()) if "层級" in df.columns else 0
+    n_early = int((df["层級"] == "Early").sum()) if "层級" in df.columns else 0
     n_suit = int((df["结论"] == "适合入场").sum())
     n_caut = int((df["结论"] == "谨慎试仓").sum())
     n_wait = int((df["结论"] == "观望").sum())
@@ -554,26 +691,29 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     ).dropna()
     n_iv_event = int((df["IV事件"] == "是").sum()) if "IV事件" in df.columns else 0
     n_vol_dump = int((df["量能"] == "放量下跌").sum()) if "量能" in df.columns else 0
+    n_earn = int((df["财报"] == "是").sum()) if "财报" in df.columns else 0
+    n_blocked = int((df["阻擋"].astype(str).str.len() > 0).sum()) if "阻擋" in df.columns else 0
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("今日機會", n_enter, f"適合 {n_suit} · 謹慎 {n_caut}")
-    m2.metric(
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Confirm", n_confirm, "可限價執行候選")
+    m2.metric("Early", n_early, "觀察／試倉")
+    m3.metric(
         "入場率",
         f"{100 * n_enter / n_all:.0f}%" if n_all else "—",
         f"{n_enter}/{n_all}",
     )
-    m3.metric(
+    m4.metric(
         "候選平均勝率",
         f"{wr_enter.mean():.0f}%" if len(wr_enter) else "—",
     )
-    m4.metric(
+    m5.metric(
         "候選平均E[R]",
         f"{exp_enter.mean():+.2f}" if len(exp_enter) else "—",
     )
     st.caption(
-        f"观望 {n_wait} · 回避 {n_avoid} · "
-        f"IV事件風險標誌 {n_iv_event} 隻 · 放量下跌 {n_vol_dump} 隻 "
-        f"（後兩者會壓低入場評級）"
+        f"適合 {n_suit} · 謹慎 {n_caut} · 观望 {n_wait} · 回避 {n_avoid} · "
+        f"財報標誌 {n_earn} · 有阻擋 {n_blocked} · "
+        f"IV事件 {n_iv_event} · 放量下跌 {n_vol_dump}"
     )
     realized = journal_stats()
     if realized.get("closed"):
@@ -591,10 +731,53 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                 f"{realized['calibration_samples']}）；接近 0 较理想。"
             )
 
-    st.markdown("### 可入場 / 掃描結果")
+    # Sort show by layer priority: Confirm > Early > 觀察 > 回避
+    layer_ord = {"Confirm": 0, "Early": 1, "觀察": 2, "回避": 3}
+    if "层級" in show.columns and not show.empty:
+        show = show.copy()
+        show["_layer_ord"] = show["层級"].map(lambda x: layer_ord.get(x, 9))
+        show_sort = ["_layer_ord"]
+        show_asc = [True]
+        if "_hist_rank" in show.columns:
+            show_sort.append("_hist_rank")
+            show_asc.append(False)
+        if "适合度" in show.columns:
+            show_sort.append("适合度")
+            show_asc.append(False)
+        if "离入場%" in show.columns:
+            show_sort.append("离入場%")
+            show_asc.append(True)
+        show = show.sort_values(
+            show_sort, ascending=show_asc, na_position="last"
+        ).drop(columns=["_layer_ord"], errors="ignore")
+
+    st.markdown("### 篩選結果（先睇呢張表）")
     if show.empty:
         st.warning("以目前過濾條件，沒有可顯示標的。可改「顯示級別」為「全部」。")
     else:
+        # One-tap SOP from the screening table
+        pick_opts = [
+            f"{r['代码']} · {r.get('层級', '')} · {r.get('主结论', r.get('结论', ''))}"
+            for _, r in show.iterrows()
+        ]
+        pc1, pc2 = st.columns([3, 1])
+        with pc1:
+            picked = st.selectbox(
+                "揀一隻開投資SOP確認",
+                pick_opts,
+                key="scan_sop_pick",
+                help="Confirm／Early 都建議入 SOP 睇清 E／S／T 先落單",
+            )
+        with pc2:
+            st.write("")
+            st.write("")
+            if st.button("開投資SOP", type="primary", width="stretch", key="scan_goto_sop"):
+                sym = str(picked).split(" · ", 1)[0].strip()
+                st.session_state.symbol = sym
+                st.session_state._pending_symbol = sym
+                st.session_state._goto_sop = True
+                st.rerun()
+
         if scan_simple:
             show = show.copy()
             show["三燈"] = (
@@ -606,25 +789,30 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
             )
             display_cols = [
                 "代码",
+                "层級",
                 "主结论",
                 "三燈",
                 "一句话",
                 "现价",
                 "掛單",
                 "止蝕",
-                "目标0-2周",
+                "离入場",
+                "阻擋",
                 "1H",
             ]
         else:
             display_cols = [
                 "代码",
                 "名称",
+                "层級",
                 "主结论",
                 "结论",
                 "位置灯",
                 "胜率灯",
                 "划算灯",
                 "一句话",
+                "离入場",
+                "阻擋",
                 "阻力",
                 "支撑",
                 "阻力%",
@@ -645,7 +833,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
             show[[c for c in display_cols if c in show.columns]],
             width="stretch",
             hide_index=True,
-            height=min(520, 48 + 36 * len(show)),
+            height=min(560, 48 + 36 * len(show)),
         )
 
     # Candidate details stay available without making the default page excessively long.
@@ -653,26 +841,32 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     if not enterable.empty:
         st.markdown("### 候選詳情")
         for _, row in enterable.iterrows():
-            title = f"{row['代码']} · {row.get('主结论', row['结论'])}（{row['适合度']:.0f}）"
-            if row["结论"] == "适合入场":
+            layer = row.get("层級", "")
+            title = f"{row['代码']} · {layer} · {row.get('主结论', row['结论'])}（{row['适合度']:.0f}）"
+            if layer == "Confirm":
                 box = st.success
-            else:
+            elif layer == "Early":
                 box = st.warning
+            else:
+                box = st.info
             with st.expander(title, expanded=False):
-                box(f"**{row['结论']}** · {row['名称']}")
+                box(f"**{row['结论']}** · {row['名称']} · 層級 **{layer}**")
                 lights = (
                     f"位置 **{row.get('位置灯', '—')}** · "
                     f"胜率 **{row.get('胜率灯', '—')}** · "
                     f"划算 **{row.get('划算灯', '—')}**"
                 )
                 st.caption(lights)
+                if row.get("阻擋"):
+                    st.error(f"阻擋：{row['阻擋']}")
                 if row.get("一句话"):
                     st.markdown(f"**主因：** {row['一句话']}")
                 c1, c2, c3, c4 = st.columns(4)
                 c1.markdown(
                     f"現價 **{row['现价']}**  \n"
                     f"入場 **{row.get('入場低', row.get('入场低'))}–{row.get('入場高', row.get('入场高'))}**  \n"
-                    f"掛單 ≈ **{row.get('掛單', row.get('挂单价'))}**"
+                    f"掛單 ≈ **{row.get('掛單', row.get('挂单价'))}**  \n"
+                    f"離入場 **{row.get('离入場', '—')}**"
                 )
                 c2.markdown(
                     f"止蝕 **{row.get('止蝕', row.get('止损'))}**  \n"
@@ -698,7 +892,6 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                 if row.get("失效"):
                     st.caption(f"失效：{row['失效']}")
                 if st.button(f"開投资SOP詳情 · {row['代码']}", key=f"goto_{row['代码']}"):
-                    # 下一轮 app 开头处理：换代码 + 自动打开投资SOP（勿在此改 nav_page，widget 已创建）
                     sym = str(row["代码"])
                     st.session_state.symbol = sym
                     st.session_state._pending_symbol = sym
@@ -714,6 +907,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         )
 
     st.caption(
-        "與投資SOP同一套 **三灯裁决**（位置 · 胜率 · 划算）· 每筆按 5000 HKD 估算賺蝕空間 · "
-        "數據 Yahoo 可能延遲 · 非投資建議 · 改規則後請按「強制刷新」"
+        "與投資SOP同一套 **三灯裁决**（位置 · 胜率 · 划算）· "
+        "Confirm／Early 只係篩選層級，落單前仍要入投資SOP · "
+        "每筆按 5000 HKD 估算賺蝕 · Yahoo 可能延遲 · 非投資建議 · 改規則後按「強制刷新」"
     )

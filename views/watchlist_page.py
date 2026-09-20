@@ -27,6 +27,7 @@ from views.common import fmt_number, get_price_fields, save_watchlist
 
 def render_watchlist(period: str, interval: str) -> None:
     st.header("自选股管理")
+    st.caption("管理 list；篩值得買請去「Watchlist掃描」。呢度「開SOP」會直接跳去投資SOP確認。")
 
     add_col, _ = st.columns([2, 3])
     with add_col:
@@ -178,9 +179,11 @@ def render_watchlist(period: str, interval: str) -> None:
     for s in list(st.session_state.watchlist):
         c1, c2, c3 = st.columns([3, 1, 1])
         c1.write(f"`{s}`")
-        if c2.button("查看", key=f"view_{s}"):
+        if c2.button("開SOP", key=f"view_{s}"):
             st.session_state.symbol = s
-            st.info(f"已选择 {s}，请到「行情看板」或「技术分析」查看。")
+            st.session_state._pending_symbol = s
+            st.session_state._goto_sop = True
+            st.rerun()
         if c3.button("删除", key=f"del_{s}"):
             st.session_state.watchlist = [x for x in st.session_state.watchlist if x != s]
             save_watchlist(st.session_state.watchlist)
@@ -188,12 +191,10 @@ def render_watchlist(period: str, interval: str) -> None:
 
     if st.button("恢复默认自选"):
         try:
-            from stock_service import QUICK_PIN
-
-            pins = list(QUICK_PIN)
+            from config import CORE_WATCHLIST as _core
+            core = list(_core)
         except Exception:
-            pins = ["MU", "SNDK"]
-        rest = [x for x in DEFAULT_WATCHLIST if x not in pins]
-        st.session_state.watchlist = pins + rest
+            core = ["MRVL", "HOOD", "GOOGL", "SNDK", "MU", "AAPL", "VRT", "PLTR", "AMD", "ARM", "LITE", "UNH", "SMH", "ASML"]
+        st.session_state.watchlist = filter_us_only(core)
         save_watchlist(st.session_state.watchlist)
         st.rerun()

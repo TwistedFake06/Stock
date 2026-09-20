@@ -1,0 +1,70 @@
+Candidate scan vs CORE (excluded from list already)
+CORE=['AAPL', 'AMD', 'GOOGL', 'HOOD', 'MRVL', 'MU', 'PLTR', 'SNDK', 'VRT']
+
+=== RECOMMENDED add (WR>=48, avgR>0, trades>=10, >=50M, not hist-drag) ===
+symbol                            name  avg_dollar_vol_m  trades  win_rate    avg_r  entries_per_month  profit_per_month_hkd
+   ARM                Arm Holdings plc       1122.507104      29 62.068966 0.491138           1.208333            296.729167
+   UNH UnitedHealth Group Incorporated       1865.771809      18 55.555556 0.388611           0.750000            145.729167
+  LITE          Lumentum Holdings Inc.       4064.962689      30 53.333333 0.348833           1.250000            218.020833
+   SMH        VanEck Semiconductor ETF       3717.572430      29 51.724138 0.119517           1.208333             72.208333
+  ASML ASML Holding N.V. - New York Re       2110.819535      39 51.282051 0.144692           1.625000            117.562500
+  MSTR                    Strategy Inc       4265.113914      16 50.000000 0.073500           0.666667             24.500000
+   DIA State Street SPDR Dow Jones Ind       1709.002121      37 48.648649 0.013270           1.541667             10.229167
+   CAT               Caterpillar, Inc.       1928.834384      25 48.000000 0.142880           1.041667             74.416667
+
+=== Most liquid among screened (dv>=200M) with stats ===
+symbol                            name  avg_dollar_vol_m  trades  win_rate     avg_r  entries_per_month  profit_per_month_hkd
+   SPY State Street SPDR S&P 500 ETF T      31090.723455      36 47.222222 -0.075944           1.500000            -56.958333
+   QQQ     Invesco QQQ Trust, Series 1      22633.986302      28 42.857143 -0.191321           1.166667           -111.604167
+  INTC               Intel Corporation      10632.060397      26 42.307692  0.040846           1.083333             22.125000
+   IWM iShares Russell 2000 Index Fund       5859.349551      30 46.666667  0.097333           1.250000             60.833333
+  ORCL              Oracle Corporation       4473.392659      20 40.000000  0.064100           0.833333             26.708333
+  MSTR                    Strategy Inc       4265.113914      16 50.000000  0.073500           0.666667             24.500000
+   TSM Taiwan Semiconductor Manufactur       4259.122820      37 45.945946  0.092595           1.541667             71.375000
+  LITE          Lumentum Holdings Inc.       4064.962689      30 53.333333  0.348833           1.250000            218.020833
+   CRM                Salesforce, Inc.       3992.950660      25 40.000000 -0.117000           1.041667            -60.937500
+   SMH        VanEck Semiconductor ETF       3717.572430      29 51.724138  0.119517           1.208333             72.208333
+   LLY           Eli Lilly and Company       2737.217358      24 29.166667 -0.321292           1.000000           -160.645833
+   WMT                    Walmart Inc.       2708.270633      31 29.032258 -0.454226           1.291667           -293.354167
+   JPM           JP Morgan Chase & Co.       2423.127524      28 42.857143  0.305107           1.166667            177.979167
+   XOM ExxonMobil Holdings Corporation       2421.662606      38 47.368421 -0.007289           1.583333             -5.770833
+   NOW                ServiceNow, Inc.       2121.882886      27 33.333333 -0.247704           1.125000           -139.333333
+  ASML ASML Holding N.V. - New York Re       2110.819535      39 51.282051  0.144692           1.625000            117.562500
+   BAC     Bank of America Corporation       2080.185939      38 44.736842  0.107763           1.583333             85.312500
+   CVX             Chevron Corporation       2052.427997      29 44.827586  0.074586           1.208333             45.062500
+   CAT               Caterpillar, Inc.       1928.834384      25 48.000000  0.142880           1.041667             74.416667
+  COST    Costco Wholesale Corporation       1875.987803      30 33.333333 -0.357533           1.250000           -223.458333
+
+=== Borderline (WR 45-48 or avgR thin) liquid ===
+symbol                            name  avg_dollar_vol_m  trades  win_rate    avg_r  entries_per_month  profit_per_month_hkd
+  SBUX           Starbucks Corporation        611.640257      32 46.875000 0.050375           1.333333             33.583333
+   IWM iShares Russell 2000 Index Fund       5859.349551      30 46.666667 0.097333           1.250000             60.833333
+   PDD               PDD Holdings Inc.        591.011902      28 46.428571 0.133643           1.166667             77.958333
+   TSM Taiwan Semiconductor Manufactur       4259.122820      37 45.945946 0.092595           1.541667             71.375000
+  SHOP                    Shopify Inc.       1021.817865      35 45.714286 0.210286           1.458333            153.333333
+
+=== Skip (in prior drag set or weak) if appeared ===
+symbol  in_drag_list  win_rate     avg_r  avg_dollar_vol_m
+   SPY         False 47.222222 -0.075944      31090.723455
+   QQQ         False 42.857143 -0.191321      22633.986302
+   XLF         False 44.827586 -0.084069       1715.026307
+   XLK         False 32.142857 -0.278000       1230.920212
+   XOM         False 47.368421 -0.007289       2421.662606
+   WMT         False 29.032258 -0.454226       2708.270633
+  COST         False 33.333333 -0.357533       1875.987803
+    HD         False 41.666667 -0.062625       1177.970507
+    BA         False 36.842105 -0.265842       1170.037015
+   CRM         False 40.000000 -0.117000       3992.950660
+   NOW         False 33.333333 -0.247704       2121.882886
+  SNOW         False 35.714286 -0.224286       1841.638889
+  UBER         False 44.827586 -0.025345       1239.572948
+  ABNB         False 42.307692 -0.022615        755.105053
+  SOFI         False 30.000000 -0.299467        673.743935
+   LLY         False 29.166667 -0.321292       2737.217358
+   JNJ         False 36.000000 -0.196560       1760.742421
+    PG         False 42.307692 -0.121385       1257.507662
+    KO         False 44.827586 -0.082586       1383.651894
+   PEP         False 39.130435 -0.058391       1117.534804
+   NKE         False 30.434783 -0.194783       1077.169167
+  BABA         False 33.333333 -0.302222       1266.159064
+   NIO         False 34.782609 -0.227391        147.400117
