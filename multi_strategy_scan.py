@@ -80,7 +80,7 @@ class SymbolMultiResult:
     hit_count: int = 0
     hit_labels: str = ""
     primary_reason: str = ""
-    suggest_tier: str = "觀察"  # 關注 | 優先看 | 觀察
+    suggest_tier: str = "不入場"  # 可入場 | 可考慮 | 不入場
     entry_opportunity: str = ""
     bias: str = ""
     error: str = ""
@@ -135,7 +135,7 @@ def evaluate_strategies(
         hist = fetch_history(sym, period=period, interval=interval)
         if hist is None or hist.empty or len(hist) < 40:
             out.error = "行情不足"
-            out.suggest_tier = "觀察"
+            out.suggest_tier = "不入場"
             return out
         data = enrich(hist)
         last = float(data["Close"].iloc[-1])
@@ -283,13 +283,13 @@ def evaluate_strategies(
 
         # Tier: multi-hit preferred
         if out.hit_count >= 3 and bull:
-            out.suggest_tier = "優先看"
+            out.suggest_tier = "可入場"
         elif out.hit_count >= 2:
-            out.suggest_tier = "關注"
+            out.suggest_tier = "可考慮"
         elif out.hit_count == 1:
-            out.suggest_tier = "觀察"
+            out.suggest_tier = "不入場"
         else:
-            out.suggest_tier = "觀察"
+            out.suggest_tier = "不入場"
         return out
     except Exception as exc:  # pragma: no cover
         out.error = f"{type(exc).__name__}: {exc}"
@@ -323,7 +323,7 @@ def scan_symbols(
         results.append(evaluate_strategies(sym, period=period, interval=interval))
     results.sort(
         key=lambda r: (
-            {"優先看": 0, "關注": 1, "觀察": 2}.get(r.suggest_tier, 9),
+            {"可入場": 0, "可考慮": 1, "不入場": 2}.get(r.suggest_tier, 9),
             -r.hit_count,
             -(max((h.strength for h in r.hits if h.fired), default=0)),
         )

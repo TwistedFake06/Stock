@@ -1,3 +1,4 @@
+from entry_labels import ENTER_MAYBE, ENTER_NO, ENTER_YES, label_enter_ok
 """Streamlit page: 自选股."""
 from __future__ import annotations
 
@@ -132,7 +133,7 @@ def render_watchlist(period: str, interval: str) -> None:
         if col in display.columns:
             display[col] = display[col].apply(lambda x: fmt_number(x))
 
-    verdict_rank = {"适合入场": 3, "谨慎试仓": 2, "观望": 1, "回避": 0}
+    verdict_rank = {"适合入场": 3, "谨慎试仓": 2, "观望": 1, "回避": 0, ENTER_YES: 3, ENTER_MAYBE: 2, ENTER_NO: 1}
     table["_sop_rank"] = table["SOP结论"].map(verdict_rank).fillna(-1)
     table["_risk_rank"] = table["允许风险"].fillna(-1)
     table["_status_rank"] = (table["SOP状态"] == "成功").astype(int)

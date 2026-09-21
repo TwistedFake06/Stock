@@ -14,6 +14,7 @@ except Exception:
 from mtf_signals import analyze_h1_trigger
 from scripts.backtest_watchlist_swing import backtest_symbol, summarize_history
 from trade_journal import journal_stats
+from entry_labels import ENTER_MAYBE, ENTER_NO, ENTER_YES, label_enter_ok, screen_layer
 from trade_sop import build_trade_sop, format_win_rate
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,16 +66,15 @@ def _light_zh(x: str) -> str:
     return {"green": "綠", "yellow": "黃", "red": "紅"}.get(x or "", "—")
 
 
+def _mask_enterable(df):
+    if "_enter_ok" in df.columns:
+        return df["_enter_ok"].isin(["适合入场", "谨慎试仓"])
+    return df["结论"].isin([ENTER_YES, ENTER_MAYBE])
+
+
 def _screen_layer(enter_ok: str, *, any_red: bool, any_yellow: bool = False) -> str:
-    """Map SOP verdict to Early Alert vs Confirm screening layer."""
-    # Confirm: full entry + no red/yellow (playbook: yellow => trial max)
-    if enter_ok == "适合入场" and not any_red and not any_yellow:
-        return "Confirm"
-    if enter_ok in ("适合入场", "谨慎试仓"):
-        return "Early"
-    if enter_ok == "观望":
-        return "觀察"
-    return "回避"
+    """Map SOP verdict to 可入場 / 可考慮 / 不入場."""
+    return screen_layer(enter_ok, any_red=any_red, any_yellow=any_yellow)
 
 def _distance_to_entry(last, lo, hi) -> tuple[float | None, str]:
     try:
@@ -130,13 +130,13 @@ def _block_reasons(sop, h1_trigger) -> str:
 def render_scan(period: str, interval: str, period_label: str) -> None:
     st.markdown("## Watchlist 掃描")
     st.caption(
-        f"從 list 篩值得買 · 先看 **層級（Confirm／Early）+ 三燈 + 掛單／止蝕／離入場** · "
+        f"從 list 篩值得買 · 先看 **層級（可入場／可考慮／不入場）+ 三燈 + 掛單／止蝕／離入場** · "
         f"{period_label} · 有興趣再撳「開投資SOP」確認 · 非投資建議"
     )
     st.info(
         "目標：高勝率 · 每月數次 · 只喺開市頭 2 小時掛單／買賣。　"
-        "預設 **核心名單 隻 + 只 Confirm**。　"
-        "**Confirm** = 三燈無紅無黃可限價掛 E　｜　**Early** = 觀察／試倉，先入 SOP。"
+        "預設 **核心名單 + 只可入場**。　"
+        "**可入場** = 三燈無紅無黃可限價掛 E　｜　**可考慮** = 試倉／有黃燈，先入 SOP　｜　**不入場** = 觀望／回避。"
     )
     scan_simple = st.toggle(
         "掃描極簡表（推荐）",
@@ -206,10 +206,10 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         with c5:
             min_level = st.selectbox(
                 "顯示級別",
-                ["只 Confirm", "Confirm+Early", "适合+谨慎", "全部"],
+                ["只可入場", "可入場+可考慮", "全部"],
                 index=0,
                 key="scan_min_level",
-                help="預設只顯示 Confirm（高勝率）；可改睇 Early 或全部",
+                help="預設只顯示可入場；可改睇可考慮或全部",
             )
         save_list = st.checkbox("寫入 scan 檔", value=True, key="scan_save_list")
 
@@ -228,7 +228,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     risk_pct = float(st.session_state.get("scan_risk", 1.0))
     horizon_ui = st.session_state.get("scan_horizon", "0–2周")
     mode_ui = st.session_state.get("scan_mode_ui", "A 防守版")
-    min_level = st.session_state.get("scan_min_level", "只 Confirm")
+    min_level = st.session_state.get("scan_min_level", "只可入場")
     save_list = bool(st.session_state.get("scan_save_list", True))
     HKD_PER_USD = 7.8
     capital = float(capital_hkd) / HKD_PER_USD
@@ -473,7 +473,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                             "名称": sop.name,
                             "模式": getattr(sop, "mode_label", mode_ui),
                             "层級": layer,
-                            "结论": sop.enter_ok,
+                            "结论": label_enter_ok(sop.enter_ok), "_enter_ok": sop.enter_ok,
                             "主结论": getattr(prim, "verdict", "—") if prim else "—",
                             "位置灯": _light_zh(pos_l),
                             "胜率灯": _light_zh(wr_l),
@@ -583,13 +583,13 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
             lights = (row.get("位置灯"), row.get("胜率灯"), row.get("划算灯"))
             any_red = any(x in ("紅", "红") for x in lights)
             if enter == "适合入场" and not any_red:
-                row["层級"] = "Confirm"
+                row["层級"] = ENTER_YES
             elif enter in ("适合入场", "谨慎试仓"):
-                row["层級"] = "Early"
+                row["层級"] = ENTER_MAYBE
             elif enter == "观望":
-                row["层級"] = "觀察"
+                row["层級"] = ENTER_NO
             else:
-                row["层級"] = "回避"
+                row["层級"] = ENTER_NO
         if "离入場" not in row or "离入場%" not in row:
             pct, label = _distance_to_entry(
                 row.get("现价"),
@@ -631,24 +631,22 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         history_avg_r = pd.to_numeric(df.get("歷史平均R"), errors="coerce")
         df["_hist_rank"] = history_avg_r.where(history_samples >= 5)
 
-    # filter (default: Confirm only for high WR)
-    if min_level == "只 Confirm":
-        show = df[df["层級"] == "Confirm"] if "层級" in df.columns else df[df["结论"] == "适合入场"]
-    elif min_level == "Confirm+Early":
+    # filter (default: 只可入場)
+    if min_level == "只可入場":
+        show = df[df["层級"] == ENTER_YES] if "层級" in df.columns else df[_mask_enterable(df)]
+    elif min_level == "可入場+可考慮":
         show = (
-            df[df["层級"].isin(["Confirm", "Early"])]
+            df[df["层級"].isin([ENTER_YES, ENTER_MAYBE])]
             if "层級" in df.columns
-            else df[df["结论"].isin(["适合入场", "谨慎试仓"])]
+            else df[_mask_enterable(df)]
         )
-    elif min_level == "仅适合入场":
-        show = df[df["结论"] == "适合入场"]
-    elif min_level == "适合+谨慎":
-        show = df[df["结论"].isin(["适合入场", "谨慎试仓"])]
+    elif min_level == "可入場+可考慮":
+        show = df[_mask_enterable(df)]
     else:
         show = df
 
     # Keep every opportunity; historical expectancy only prioritizes within the same verdict.
-    order_map = {"适合入场": 0, "谨慎试仓": 1, "观望": 2, "回避": 3}
+    order_map = {ENTER_YES: 0, ENTER_MAYBE: 1, ENTER_NO: 2}
     df["_ord"] = df["结论"].map(lambda x: order_map.get(x, 9))
     sort_cols = ["_ord"]
     ascending = [True]
@@ -676,18 +674,18 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
 
     # summary metrics
     n_all = len(df)
-    n_confirm = int((df["层級"] == "Confirm").sum()) if "层級" in df.columns else 0
-    n_early = int((df["层級"] == "Early").sum()) if "层級" in df.columns else 0
-    n_suit = int((df["结论"] == "适合入场").sum())
+    n_confirm = int((df["层級"] == ENTER_YES).sum()) if "层級" in df.columns else 0
+    n_early = int((df["层級"] == ENTER_MAYBE).sum()) if "层級" in df.columns else 0
+    n_suit = int((df["_enter_ok"] == "适合入场").sum()) if "_enter_ok" in df.columns else int((df["结论"] == ENTER_YES).sum())
     n_caut = int((df["结论"] == "谨慎试仓").sum())
     n_wait = int((df["结论"] == "观望").sum())
     n_avoid = int((df["结论"] == "回避").sum())
     n_enter = n_suit + n_caut
     wr_enter = pd.to_numeric(
-        df.loc[df["结论"].isin(["适合入场", "谨慎试仓"]), "胜率%"], errors="coerce"
+        df.loc[_mask_enterable(df), "胜率%"], errors="coerce"
     ).dropna()
     exp_enter = pd.to_numeric(
-        df.loc[df["结论"].isin(["适合入场", "谨慎试仓"]), "期望E[R]"], errors="coerce"
+        df.loc[_mask_enterable(df), "期望E[R]"], errors="coerce"
     ).dropna()
     n_iv_event = int((df["IV事件"] == "是").sum()) if "IV事件" in df.columns else 0
     n_vol_dump = int((df["量能"] == "放量下跌").sum()) if "量能" in df.columns else 0
@@ -695,8 +693,8 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     n_blocked = int((df["阻擋"].astype(str).str.len() > 0).sum()) if "阻擋" in df.columns else 0
 
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Confirm", n_confirm, "可限價執行候選")
-    m2.metric("Early", n_early, "觀察／試倉")
+    m1.metric("可入場", n_confirm, "可限價執行候選")
+    m2.metric("可考慮", n_early, "試倉／有黃燈")
     m3.metric(
         "入場率",
         f"{100 * n_enter / n_all:.0f}%" if n_all else "—",
@@ -731,8 +729,8 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                 f"{realized['calibration_samples']}）；接近 0 较理想。"
             )
 
-    # Sort show by layer priority: Confirm > Early > 觀察 > 回避
-    layer_ord = {"Confirm": 0, "Early": 1, "觀察": 2, "回避": 3}
+    # Sort: 可入場 > 可考慮 > 不入場
+    layer_ord = {ENTER_YES: 0, ENTER_MAYBE: 1, ENTER_NO: 2}
     if "层級" in show.columns and not show.empty:
         show = show.copy()
         show["_layer_ord"] = show["层級"].map(lambda x: layer_ord.get(x, 9))
@@ -766,7 +764,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                 "揀一隻開投資SOP確認",
                 pick_opts,
                 key="scan_sop_pick",
-                help="Confirm／Early 都建議入 SOP 睇清 E／S／T 先落單",
+                help="可入場／可考慮都建議入 SOP 睇清 E／S／T 先落單",
             )
         with pc2:
             st.write("")
@@ -837,15 +835,15 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         )
 
     # Candidate details stay available without making the default page excessively long.
-    enterable = df[df["结论"].isin(["适合入场", "谨慎试仓"])]
+    enterable = df[_mask_enterable(df)]
     if not enterable.empty:
         st.markdown("### 候選詳情")
         for _, row in enterable.iterrows():
             layer = row.get("层級", "")
             title = f"{row['代码']} · {layer} · {row.get('主结论', row['结论'])}（{row['适合度']:.0f}）"
-            if layer == "Confirm":
+            if layer == ENTER_YES:
                 box = st.success
-            elif layer == "Early":
+            elif layer == ENTER_MAYBE:
                 box = st.warning
             else:
                 box = st.info
@@ -908,6 +906,6 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
 
     st.caption(
         "與投資SOP同一套 **三灯裁决**（位置 · 胜率 · 划算）· "
-        "Confirm／Early 只係篩選層級，落單前仍要入投資SOP · "
+        "可入場／可考慮只係篩選層級，落單前仍要入投資SOP · "
         "每筆按 5000 HKD 估算賺蝕 · Yahoo 可能延遲 · 非投資建議 · 改規則後按「強制刷新」"
     )

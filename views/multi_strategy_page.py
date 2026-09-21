@@ -1,6 +1,8 @@
 """Streamlit: 多策略掃描 — aggregate entry lenses on watchlist."""
 from __future__ import annotations
 
+from entry_labels import ENTER_MAYBE, ENTER_NO, ENTER_YES, label_multi_tier
+
 import pandas as pd
 import streamlit as st
 
@@ -15,8 +17,8 @@ def render_multi_strategy_scan(period: str, interval: str, period_label: str) ->
         "命中越多越值得再入投資SOP · 非投資建議 · 實盤仍建議開市頭 2 小時掛單"
     )
     st.info(
-        "同 Watchlist Confirm 互補：呢頁係 **多鏡頭集合**；"
-        "Confirm 係完整 SOP 門檻。兩邊都靚先優先做。"
+        "同 Watchlist 互補：呢頁係 **多鏡頭集合**；"
+        "可入場 係完整 SOP 門檻。兩邊都靚先優先做。"
     )
 
     core_only = st.toggle(
@@ -90,7 +92,7 @@ def render_multi_strategy_scan(period: str, interval: str, period_label: str) ->
 
     results.sort(
         key=lambda r: (
-            {"優先看": 0, "關注": 1, "觀察": 2}.get(r.suggest_tier, 9),
+            {ENTER_YES: 0, ENTER_MAYBE: 1, ENTER_NO: 2}.get(r.suggest_tier, 9),
             -r.hit_count,
         )
     )
@@ -134,11 +136,11 @@ def _render_results(results, min_hits: int) -> None:
             }
         )
 
-    n_pri = sum(1 for r in results if r.suggest_tier == "優先看")
-    n_att = sum(1 for r in results if r.suggest_tier == "關注")
+    n_pri = sum(1 for r in results if r.suggest_tier == ENTER_YES)
+    n_att = sum(1 for r in results if r.suggest_tier == ENTER_MAYBE)
     c1, c2, c3 = st.columns(3)
-    c1.metric("優先看", n_pri)
-    c2.metric("關注", n_att)
+    c1.metric("可入場", n_pri)
+    c2.metric("可考慮", n_att)
     c3.metric(f"表上顯示（≥{min_hits} 命中）", len(rows))
 
     if not rows:
@@ -152,7 +154,7 @@ def _render_results(results, min_hits: int) -> None:
         st.markdown("### 明細")
         for r in interesting:
             title = f"{r.symbol} · {r.suggest_tier} · 命中 {r.hit_count}"
-            with st.expander(title, expanded=(r.suggest_tier == "優先看")):
+            with st.expander(title, expanded=(r.suggest_tier == ENTER_YES)):
                 st.caption(f"多空 **{r.bias}** · 入場評估 **{r.entry_opportunity}** · 現價 **{r.last_price}**")
                 for h in r.hits:
                     mark = "✅" if h.fired else "·"
@@ -165,5 +167,5 @@ def _render_results(results, min_hits: int) -> None:
 
     st.caption(
         "策略互不要求全部同意；命中數係「幾種鏡頭同時覺得有機會」。"
-        "落單前仍用投資SOP／Confirm 規則同開市頭 2 小時紀律。"
+        "落單前仍用投資SOP／可入場規則同開市頭 2 小時紀律。"
     )

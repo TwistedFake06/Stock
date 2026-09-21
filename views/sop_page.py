@@ -10,15 +10,16 @@ import pandas as pd
 import streamlit as st
 
 from stock_service import cache_bucket, cached_info, fetch_history
+from entry_labels import ENTER_MAYBE, ENTER_NO, ENTER_YES, label_enter_ok
 from trade_sop import build_trade_sop, format_win_rate
 from views.common import render_data_status, render_session_quote_card
 from views.journal_panel import render_journal_panel
 
 
 def _verdict_box(verdict: str):
-    if verdict in ("可以入場", "适合入场"):
+    if verdict in ("可以入場", "适合入场", ENTER_YES):
         return st.success
-    if verdict in ("可以試倉", "谨慎试仓"):
+    if verdict in ("可以試倉", "谨慎试仓", ENTER_MAYBE):
         return st.warning
     if verdict in ("不做多", "回避"):
         return st.error
@@ -165,7 +166,7 @@ def render_sop(
         v = primary.verdict
         _verdict_box(v)(f"## {v} · {primary.label} · {mode_lab}")
     else:
-        st.warning(sop.enter_ok)
+        st.warning(label_enter_ok(sop.enter_ok))
 
     # 三灯（位置 · 胜率 · 划算）— 日常唯一必看
     def _light_emoji(x: str) -> str:
@@ -287,7 +288,7 @@ def render_sop(
         default_rr=(
             (primary.rr_net or primary.rr) if primary else sop.rr_t1
         ),
-        default_verdict=(primary.verdict if primary else sop.enter_ok) or "",
+        default_verdict=(primary.verdict if primary else label_enter_ok(sop.enter_ok)) or "",
         default_mode=getattr(sop, "mode", "") or "",
         default_mode_label=getattr(sop, "mode_label", "") or "",
         default_exit_px=float(sop.last_price) if sop.last_price else None,
