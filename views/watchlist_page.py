@@ -1,6 +1,7 @@
-from entry_labels import ENTER_MAYBE, ENTER_NO, ENTER_YES, label_enter_ok
 """Streamlit page: 自选股."""
 from __future__ import annotations
+
+from entry_labels import ENTER_MAYBE, ENTER_NO, ENTER_YES, label_enter_ok
 
 import pandas as pd
 import streamlit as st
