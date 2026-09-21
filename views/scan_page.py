@@ -135,7 +135,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     )
     st.info(
         "目標：高勝率 · 每月數次 · 只喺開市頭 2 小時掛單／買賣。　"
-        "預設 **核心 14 隻 + 只 Confirm**。　"
+        "預設 **核心名單 隻 + 只 Confirm**。　"
         "**Confirm** = 三燈無紅無黃可限價掛 E　｜　**Early** = 觀察／試倉，先入 SOP。"
     )
     scan_simple = st.toggle(

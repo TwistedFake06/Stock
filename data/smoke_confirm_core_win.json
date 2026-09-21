@@ -1,0 +1,142 @@
+[
+  {
+    "symbol": "MRVL",
+    "enter_ok": "观望",
+    "layer": "觀察",
+    "lights": "red/red/red",
+    "block": "位置紅 · 勝率紅 · 劃算紅 · IV事件",
+    "dist": "高出 3.9%",
+    "price": 244.25,
+    "entry": "223.12-234.73"
+  },
+  {
+    "symbol": "HOOD",
+    "enter_ok": "观望",
+    "layer": "觀察",
+    "lights": "red/red/red",
+    "block": "位置紅 · 勝率紅 · 劃算紅 · IV事件 · 逆勢",
+    "dist": "高出 4.1%",
+    "price": 119.82,
+    "entry": "108.6595-114.8785"
+  },
+  {
+    "symbol": "GOOGL",
+    "enter_ok": "观望",
+    "layer": "觀察",
+    "lights": "red/red/red",
+    "block": "位置紅 · 勝率紅 · 劃算紅",
+    "dist": "已在區內",
+    "price": 349.54,
+    "entry": "342.82-351.22"
+  },
+  {
+    "symbol": "SNDK",
+    "enter_ok": "观望",
+    "layer": "觀察",
+    "lights": "red/red/red",
+    "block": "位置紅 · 勝率紅 · 劃算紅 · IV事件",
+    "dist": "已在區內",
+    "price": 1791.8199,
+    "entry": "1698.56-1815.13"
+  },
+  {
+    "symbol": "MU",
+    "enter_ok": "观望",
+    "layer": "觀察",
+    "lights": "red/red/red",
+    "block": "位置紅 · 勝率紅 · 劃算紅 · 財報8天",
+    "dist": "高出 3.1%",
+    "price": 1015.8,
+    "entry": "944.82-984.23"
+  },
+  {
+    "symbol": "AAPL",
+    "enter_ok": "观望",
+    "layer": "觀察",
+    "lights": "red/red/red",
+    "block": "位置紅 · 勝率紅 · 劃算紅",
+    "dist": "高出 2.8%",
+    "price": 336.13,
+    "entry": "318.4943-326.8439"
+  },
+  {
+    "symbol": "VRT",
+    "enter_ok": "观望",
+    "layer": "觀察",
+    "lights": "red/red/red",
+    "block": "位置紅 · 勝率紅 · 劃算紅 · IV事件 · 逆勢",
+    "dist": "差 1.8%",
+    "price": 249.39,
+    "entry": "253.8718-267.9198"
+  },
+  {
+    "symbol": "PLTR",
+    "enter_ok": "观望",
+    "layer": "觀察",
+    "lights": "red/red/red",
+    "block": "位置紅 · 勝率紅 · 劃算紅 · IV事件",
+    "dist": "高出 5.3%",
+    "price": 177.64,
+    "entry": "158.6085-168.2845"
+  },
+  {
+    "symbol": "AMD",
+    "enter_ok": "观望",
+    "layer": "觀察",
+    "lights": "red/red/red",
+    "block": "位置紅 · 勝率紅 · 劃算紅",
+    "dist": "高出 2.8%",
+    "price": 559.82,
+    "entry": "525.3907-544.3533"
+  },
+  {
+    "symbol": "ARM",
+    "enter_ok": "观望",
+    "layer": "觀察",
+    "lights": "red/red/red",
+    "block": "位置紅 · 勝率紅 · 劃算紅 · IV事件",
+    "dist": "差 0.5%",
+    "price": 275.61,
+    "entry": "276.9673-295.9157"
+  },
+  {
+    "symbol": "LITE",
+    "enter_ok": "观望",
+    "layer": "觀察",
+    "lights": "red/red/red",
+    "block": "位置紅 · 勝率紅 · 劃算紅 · IV事件",
+    "dist": "高出 4.5%",
+    "price": 930.91,
+    "entry": "838.1717-889.1383"
+  },
+  {
+    "symbol": "UNH",
+    "enter_ok": "观望",
+    "layer": "觀察",
+    "lights": "red/red/red",
+    "block": "位置紅 · 勝率紅 · 劃算紅",
+    "dist": "差 2.9%",
+    "price": 376.9,
+    "entry": "387.9567-398.0098"
+  },
+  {
+    "symbol": "SMH",
+    "enter_ok": "观望",
+    "layer": "觀察",
+    "lights": "red/red/red",
+    "block": "位置紅 · 勝率紅 · 劃算紅",
+    "dist": "已在區內",
+    "price": 573.0,
+    "entry": "563.264-576.29"
+  },
+  {
+    "symbol": "ASML",
+    "enter_ok": "观望",
+    "layer": "觀察",
+    "lights": "red/red/red",
+    "block": "位置紅 · 勝率紅 · 劃算紅 · IV事件",
+    "dist": "差 0.1%",
+    "price": 1679.92,
+    "entry": "1681.0126-1736.0875"
+  }
+]
