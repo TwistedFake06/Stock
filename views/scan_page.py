@@ -10,7 +10,7 @@ from stock_service import DEFAULT_WATCHLIST, normalize_symbol
 try:
     from config import CORE_WATCHLIST
 except Exception:
-    CORE_WATCHLIST = ["MRVL", "HOOD", "GOOGL", "SNDK", "MU", "AAPL", "VRT", "PLTR", "AMD"]
+    CORE_WATCHLIST = ["MRVL", "HOOD", "GOOGL", "SNDK", "MU", "AAPL", "VRT", "CRWV", "PLTR", "AMD"]
 from mtf_signals import analyze_h1_trigger
 from scripts.backtest_watchlist_swing import backtest_symbol, summarize_history
 from trade_journal import journal_stats

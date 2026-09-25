@@ -1,38 +1,17 @@
-# Watchlist for SOP scan page
-# One symbol per line (synced from Futu 自選 screenshots 2026-09-22)
+# Watchlist for SOP scan page (high-WR core universe)
+# One symbol per line
+MRVL
+HOOD
 GOOGL
-NVDA
-MSFT
-TSLA
-META
 SNDK
 MU
-INTC
-ORCL
-AMD
 AAPL
-AMZN
-SMCI
-IONQ
-RGTI
-QUBT
-ONDS
-QCOM
-WDC
-LITE
 VRT
-MUR
-NFLX
-NBIS
-UNH
+CRWV
 PLTR
-RXRX
-SMR
-BE
-COHR
-QQQ
-SOXX
-SPCX
-RKLB
-WMT
-DELL
+AMD
+ARM
+LITE
+UNH
+SMH
+ASML

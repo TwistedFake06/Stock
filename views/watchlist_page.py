@@ -196,7 +196,7 @@ def render_watchlist(period: str, interval: str) -> None:
             from config import CORE_WATCHLIST as _core
             core = list(_core)
         except Exception:
-            core = ["MRVL", "HOOD", "GOOGL", "SNDK", "MU", "AAPL", "VRT", "PLTR", "AMD", "ARM", "LITE", "UNH", "SMH", "ASML"]
+            core = ["MRVL", "HOOD", "GOOGL", "SNDK", "MU", "AAPL", "VRT", "CRWV", "PLTR", "AMD", "ARM", "LITE", "UNH", "SMH", "ASML"]
         st.session_state.watchlist = filter_us_only(core)
         save_watchlist(st.session_state.watchlist)
         st.rerun()

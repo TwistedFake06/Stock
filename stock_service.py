@@ -10,45 +10,36 @@ import pandas as pd
 import yfinance as yf
 
 # US-only quick list (no HK / A-share)
-# 常用置顶：MU / SNDK；名单=已选热门票（无板块龙头、无 ETF）
-QUICK_PIN = ["MU", "SNDK"]
+# 常用置顶：MU / SNDK；�???已选热?�票（�??��?龙头?��? ETF�?QUICK_PIN = ["MU", "SNDK"]
 DEFAULT_WATCHLIST = [
-    "GOOGL",
-    "NVDA",
-    "MSFT",
-    "TSLA",
-    "META",
-    "SNDK",
     "MU",
-    "INTC",
-    "ORCL",
-    "AMD",
+    "SNDK",
     "AAPL",
+    "MSFT",
+    "NVDA",
+    "GOOGL",
     "AMZN",
+    "META",
+    "TSLA",
+    "AMD",
+    "QCOM",
+    "ORCL",
+    "VRT",
+    "CRWV",
     "SMCI",
+    "NFLX",
     "IONQ",
     "RGTI",
-    "QUBT",
     "ONDS",
-    "QCOM",
-    "WDC",
-    "LITE",
-    "VRT",
-    "MUR",
-    "NFLX",
-    "NBIS",
-    "UNH",
     "PLTR",
-    "RXRX",
-    "SMR",
-    "BE",
-    "COHR",
-    "QQQ",
-    "SOXX",
-    "SPCX",
-    "RKLB",
-    "WMT",
-    "DELL",
+    "HOOD",
+    "AVGO",
+    "INTC",
+    "MRVL",
+    "APP",
+    "MSTR",
+    "COIN",
+    "LITE",
 ]
 
 
@@ -79,19 +70,19 @@ def filter_us_only(symbols: list[str]) -> list[str]:
 
 
 PERIOD_MAP = {
-    "1月": "1mo",
-    "3月": "3mo",
-    "6月": "6mo",
-    "1年": "1y",
-    "2年": "2y",
-    "5年": "5y",
-    "最大": "max",
+    "1??: "1mo",
+    "3??: "3mo",
+    "6??: "6mo",
+    "1�?: "1y",
+    "2�?: "2y",
+    "5�?: "5y",
+    "?��?: "max",
 }
 
 INTERVAL_MAP = {
-    "日线": "1d",
-    "周线": "1wk",
-    "月线": "1mo",
+    "?�线": "1d",
+    "?�线": "1wk",
+    "?�线": "1mo",
 }
 
 # Lazy Streamlit cache wrapper (works on Cloud + local streamlit run)
@@ -215,7 +206,7 @@ def fetch_history_extended(
     """
     Intraday OHLCV with pre/post market bars when Yahoo provides them.
 
-    Uses ``prepost=True``. Best for short periods (1d–5d) and 1m/5m/15m.
+    Uses ``prepost=True``. Best for short periods (1d??d) and 1m/5m/15m.
     Daily bars ignore prepost (same as regular history).
     """
     ticker = get_ticker(symbol)
@@ -331,7 +322,7 @@ def fetch_info(symbol: str) -> dict[str, Any]:
         "bid",
         "ask",
     )
-    # Some yfinance versions expose quote via fast path only — leave as-is if present
+    # Some yfinance versions expose quote via fast path only ??leave as-is if present
     for k in pre_keys:
         if k not in info:
             info.setdefault(k, None)
@@ -437,41 +428,4 @@ def cache_bucket(minutes: int = 5) -> str:
 try:
     from config import CORE_WATCHLIST as CORE_WATCHLIST
 except Exception:
-        CORE_WATCHLIST = [
-        "GOOGL",
-        "NVDA",
-        "MSFT",
-        "TSLA",
-        "META",
-        "SNDK",
-        "MU",
-        "INTC",
-        "ORCL",
-        "AMD",
-        "AAPL",
-        "AMZN",
-        "SMCI",
-        "IONQ",
-        "RGTI",
-        "QUBT",
-        "ONDS",
-        "QCOM",
-        "WDC",
-        "LITE",
-        "VRT",
-        "MUR",
-        "NFLX",
-        "NBIS",
-        "UNH",
-        "PLTR",
-        "RXRX",
-        "SMR",
-        "BE",
-        "COHR",
-        "QQQ",
-        "SOXX",
-        "SPCX",
-        "RKLB",
-        "WMT",
-        "DELL",
-    ]
+    CORE_WATCHLIST = ["MRVL", "HOOD", "GOOGL", "SNDK", "MU", "AAPL", "VRT", "CRWV", "PLTR", "AMD", "ARM", "LITE", "UNH", "SMH", "ASML"]

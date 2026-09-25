@@ -51,6 +51,7 @@ except Exception:  # pragma: no cover
         "WDC",
         "LITE",
         "VRT",
+        "CRWV",
         "MUR",
         "NFLX",
         "NBIS",
