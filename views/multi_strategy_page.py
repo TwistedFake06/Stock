@@ -1,4 +1,4 @@
-"""Streamlit: 多策略掃描 — aggregate entry lenses on watchlist."""
+"""Streamlit: 多策略掃描 — aggregate bullish + bearish entry lenses on watchlist."""
 from __future__ import annotations
 
 from entry_labels import ENTER_MAYBE, ENTER_NO, ENTER_YES, label_multi_tier
@@ -6,19 +6,27 @@ from entry_labels import ENTER_MAYBE, ENTER_NO, ENTER_YES, label_multi_tier
 import pandas as pd
 import streamlit as st
 
-from multi_strategy_scan import CORE_WATCHLIST, scan_symbols
+from multi_strategy_scan import (
+    BEAR_TIER_NONE,
+    BEAR_TIER_STRONG,
+    BEAR_TIER_WATCH,
+    CORE_WATCHLIST,
+    scan_symbols,
+)
 from stock_service import DEFAULT_WATCHLIST, normalize_symbol
 
 
 def render_multi_strategy_scan(period: str, interval: str, period_label: str) -> None:
     st.markdown("## 多策略掃描")
     st.caption(
-        f"並行檢查 **看多／超賣／入場區／量能／趨勢對齊／MACD轉強** · {period_label} · "
-        "命中越多越值得再入投資SOP · 非投資建議 · 實盤仍建議開市頭 2 小時掛單"
+        f"並行 **6 看多**（看多／超賣／入場區／量能／趨勢對齊／MACD轉強）+ "
+        f"**6 看空**（看空／超買／壓力／回避區／量能偏空／趨勢逆勢／MACD轉弱）· {period_label} · "
+        "看多／看空命中分開計 · 非投資建議 · 實盤仍建議開市頭 2 小時掛單"
     )
     st.info(
-        "同 Watchlist 互補：呢頁係 **多鏡頭集合**；"
+        "同 Watchlist 互補：呢頁係 **多鏡頭集合**（多空各 6）；"
         "可入場 係完整 SOP 門檻。兩邊都靚先優先做。"
+        "偏空分級只係回避提示，唔等同做空指令。"
     )
 
     core_only = st.toggle(
@@ -27,11 +35,24 @@ def render_multi_strategy_scan(period: str, interval: str, period_label: str) ->
         key="ms_core_only",
     )
     min_hits = st.select_slider(
-        "最少命中策略數",
+        "最少看多命中數",
         options=[1, 2, 3, 4],
         value=int(st.session_state.get("ms_min_hits", 2)),
         key="ms_min_hits",
-        help="預設 ≥2：減少單一指標噪音",
+        help="預設 ≥2：減少單一指標噪音（只過濾看多側）",
+    )
+    min_bear = st.select_slider(
+        "最少看空命中數（可選過濾）",
+        options=[0, 1, 2, 3, 4],
+        value=int(st.session_state.get("ms_min_bear", 0)),
+        key="ms_min_bear",
+        help="0＝唔過濾看空；≥1 時只顯示達標嘅偏空票（可同看多表並存）",
+    )
+    sort_by = st.radio(
+        "排序",
+        ["看多優先", "看空優先"],
+        horizontal=True,
+        key="ms_sort_by",
     )
 
     session_wl = list(st.session_state.get("watchlist") or DEFAULT_WATCHLIST)
@@ -59,16 +80,13 @@ def render_multi_strategy_scan(period: str, interval: str, period_label: str) ->
         cached = st.session_state.get("ms_results")
         if cached:
             st.caption("顯示上次掃描快取；要最新請再按開始。")
-            _render_results(cached, min_hits)
+            _render_results(cached, min_hits, min_bear, sort_by)
         else:
-            st.info("按「開始多策略掃描」對清單跑六種策略。")
+            st.info("按「開始多策略掃描」對清單跑 6 看多 + 6 看空策略。")
         return
 
     progress = st.progress(0, text="多策略掃描中…")
-    # scan_symbols does all; update progress coarsely
     results = []
-    n = max(len(symbols), 1)
-    # run one-by-one for progress UX
     from multi_strategy_scan import evaluate_strategies
 
     core_set = {normalize_symbol(s) for s in CORE_WATCHLIST}
@@ -90,20 +108,39 @@ def render_multi_strategy_scan(period: str, interval: str, period_label: str) ->
         progress.progress((i + 1) / len(cleaned), text=f"掃描 {sym}…")
     progress.empty()
 
-    results.sort(
+    results = _sort_results(results, sort_by)
+    st.session_state["ms_results"] = results
+    _render_results(results, min_hits, min_bear, sort_by)
+
+
+def _sort_results(results, sort_by: str):
+    if sort_by == "看空優先":
+        return sorted(
+            results,
+            key=lambda r: (
+                {BEAR_TIER_STRONG: 0, BEAR_TIER_WATCH: 1, BEAR_TIER_NONE: 2}.get(
+                    getattr(r, "bear_tier", BEAR_TIER_NONE), 9
+                ),
+                -getattr(r, "bear_hit_count", 0),
+                -r.hit_count,
+            ),
+        )
+    return sorted(
+        results,
         key=lambda r: (
             {ENTER_YES: 0, ENTER_MAYBE: 1, ENTER_NO: 2}.get(r.suggest_tier, 9),
             -r.hit_count,
-        )
+            -getattr(r, "bear_hit_count", 0),
+        ),
     )
-    st.session_state["ms_results"] = results
-    _render_results(results, min_hits)
 
 
-def _render_results(results, min_hits: int) -> None:
+def _render_results(results, min_hits: int, min_bear: int = 0, sort_by: str = "看多優先") -> None:
     if not results:
         st.warning("無結果。")
         return
+
+    results = _sort_results(results, sort_by)
 
     rows = []
     for r in results:
@@ -112,8 +149,11 @@ def _render_results(results, min_hits: int) -> None:
                 {
                     "代码": r.symbol,
                     "建議": "—",
-                    "命中數": 0,
-                    "命中策略": "—",
+                    "看多命中": 0,
+                    "看多策略": "—",
+                    "偏空分級": "—",
+                    "看空命中": 0,
+                    "看空策略": "—",
                     "多空": "—",
                     "入場評估": "—",
                     "現價": r.last_price,
@@ -121,14 +161,23 @@ def _render_results(results, min_hits: int) -> None:
                 }
             )
             continue
-        if r.hit_count < min_hits:
+        bull_ok = r.hit_count >= min_hits
+        bear_ok = getattr(r, "bear_hit_count", 0) >= min_bear if min_bear > 0 else False
+        # min_bear==0: legacy bull-only filter; else show if bull OR bear threshold met
+        if min_bear == 0:
+            if not bull_ok:
+                continue
+        elif not (bull_ok or bear_ok):
             continue
         rows.append(
             {
                 "代码": r.symbol,
                 "建議": r.suggest_tier,
-                "命中數": r.hit_count,
-                "命中策略": r.hit_labels,
+                "看多命中": r.hit_count,
+                "看多策略": r.hit_labels,
+                "偏空分級": getattr(r, "bear_tier", BEAR_TIER_NONE),
+                "看空命中": getattr(r, "bear_hit_count", 0),
+                "看空策略": getattr(r, "bear_hit_labels", "—"),
                 "多空": r.bias,
                 "入場評估": r.entry_opportunity,
                 "現價": r.last_price,
@@ -138,27 +187,58 @@ def _render_results(results, min_hits: int) -> None:
 
     n_pri = sum(1 for r in results if r.suggest_tier == ENTER_YES)
     n_att = sum(1 for r in results if r.suggest_tier == ENTER_MAYBE)
-    c1, c2, c3 = st.columns(3)
+    n_bear_s = sum(1 for r in results if getattr(r, "bear_tier", "") == BEAR_TIER_STRONG)
+    n_bear_w = sum(1 for r in results if getattr(r, "bear_tier", "") == BEAR_TIER_WATCH)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("可入場", n_pri)
     c2.metric("可考慮", n_att)
-    c3.metric(f"表上顯示（≥{min_hits} 命中）", len(rows))
+    c3.metric("偏空強", n_bear_s)
+    c4.metric("偏空留意", n_bear_w)
+    c5.metric("表上顯示", len(rows))
 
     if not rows:
-        st.warning(f"沒有 ≥{min_hits} 個策略同時命中嘅票。可調低「最少命中策略數」。")
+        st.warning(
+            f"沒有符合過濾嘅票（看多≥{min_hits}"
+            + (f" 或 看空≥{min_bear}" if min_bear else "")
+            + "）。可調低命中門檻。"
+        )
     else:
         st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True, height=420)
 
     # detail + SOP jump
-    interesting = [r for r in results if r.hit_count >= min_hits and not r.error]
+    interesting = []
+    for r in results:
+        if r.error:
+            continue
+        if min_bear == 0:
+            if r.hit_count >= min_hits:
+                interesting.append(r)
+        else:
+            if r.hit_count >= min_hits or getattr(r, "bear_hit_count", 0) >= min_bear:
+                interesting.append(r)
     if interesting:
         st.markdown("### 明細")
         for r in interesting:
-            title = f"{r.symbol} · {r.suggest_tier} · 命中 {r.hit_count}"
+            bt = getattr(r, "bear_tier", BEAR_TIER_NONE)
+            title = (
+                f"{r.symbol} · {r.suggest_tier} · 看多 {r.hit_count}"
+                f" · {bt} · 看空 {getattr(r, 'bear_hit_count', 0)}"
+            )
             with st.expander(title, expanded=(r.suggest_tier == ENTER_YES)):
-                st.caption(f"多空 **{r.bias}** · 入場評估 **{r.entry_opportunity}** · 現價 **{r.last_price}**")
+                st.caption(
+                    f"多空 **{r.bias}** · 入場評估 **{r.entry_opportunity}** · "
+                    f"現價 **{r.last_price}**"
+                )
+                st.markdown("**看多鏡頭**")
                 for h in r.hits:
                     mark = "✅" if h.fired else "·"
                     st.markdown(f"{mark} **{h.label}** — {h.reason}")
+                st.markdown("**看空鏡頭**")
+                for h in getattr(r, "bear_hits", []) or []:
+                    mark = "🔻" if h.fired else "·"
+                    st.markdown(f"{mark} **{h.label}** — {h.reason}")
+                if getattr(r, "bear_primary_reason", ""):
+                    st.caption(f"偏空主因：{r.bear_primary_reason}")
                 if st.button(f"開投資SOP · {r.symbol}", key=f"ms_sop_{r.symbol}"):
                     st.session_state.symbol = r.symbol
                     st.session_state._pending_symbol = r.symbol
@@ -166,6 +246,7 @@ def _render_results(results, min_hits: int) -> None:
                     st.rerun()
 
     st.caption(
-        "策略互不要求全部同意；命中數係「幾種鏡頭同時覺得有機會」。"
+        "策略互不要求全部同意；命中數係「幾種鏡頭同時覺得有機會／風險」。"
+        "看多命中同看空命中分開計，唔會混入同一 hit_count。"
         "落單前仍用投資SOP／可入場規則同開市頭 2 小時紀律。"
     )
