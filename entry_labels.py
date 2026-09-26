@@ -82,13 +82,43 @@ def screen_layer(enter_ok: str, *, any_red: bool, any_yellow: bool) -> str:
     return ENTER_NO
 
 
-def _rr_ok(rr: float | None, floor: float) -> bool:
+def coerce_rr(rr: object) -> float | None:
+    """Parse RR; None / blank / NaN → None (soft must not treat as 0)."""
     if rr is None:
-        return False
+        return None
+    if isinstance(rr, str) and not rr.strip():
+        return None
     try:
-        return float(rr) >= float(floor)
+        v = float(rr)
     except (TypeError, ValueError):
+        return None
+    if v != v:  # NaN
+        return None
+    return v
+
+
+def _rr_ok(rr: float | None, floor: float) -> bool:
+    v = coerce_rr(rr)
+    if v is None:
         return False
+    return v >= float(floor)
+
+
+def soft_rr_from_row(row: dict) -> float | None:
+    """RR for soft digest rebuild from a scan cache row.
+
+    If `_rr_soft` was stored at scan time (including explicit None), keep it —
+    do not substitute display `R:R` (may be another horizon). Legacy rows
+    without the key fall back to `R:R` / `R:R_0-2周`.
+    """
+    if "_rr_soft" in row:
+        return coerce_rr(row.get("_rr_soft"))
+    for key in ("R:R", "R:R_0-2周"):
+        if key in row:
+            v = coerce_rr(row.get(key))
+            if v is not None:
+                return v
+    return None
 
 
 def is_soft_enter(
@@ -142,3 +172,27 @@ def digest_bucket(
     if layer == ENTER_MAYBE:
         return ENTER_MAYBE
     return ENTER_NO
+
+
+def filter_layers_for_min_level(min_level: str | None) -> frozenset[str] | None:
+    """Allowed 层級 labels for scan filter; None means show all.
+
+    Legacy session value「只可入場」maps to hard Confirm + soft (same as 可入場+soft).
+    """
+    s = (min_level or "").strip()
+    if s in (
+        "可入場+soft",
+        "可入場+soft（預設）",
+        "只可入場",
+        "硬+soft",
+    ):
+        return frozenset({ENTER_YES, ENTER_SOFT})
+    if s in ("只 soft 可入場", "只 soft"):
+        return frozenset({ENTER_SOFT})
+    if s in ("可入場+可考慮", "含可考慮"):
+        return frozenset({ENTER_YES, ENTER_SOFT, ENTER_MAYBE})
+    if s in ("全部", ""):
+        return None
+    # Unknown / stale UI value → safe default (hard + soft), not empty.
+    return frozenset({ENTER_YES, ENTER_SOFT})
+

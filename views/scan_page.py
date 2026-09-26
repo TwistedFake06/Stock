@@ -8,13 +8,25 @@ import streamlit as st
 
 from stock_service import DEFAULT_WATCHLIST, normalize_symbol
 try:
-    from config import CORE_WATCHLIST
+    from config import CORE_WATCHLIST, CORE_A_TIER_SET
 except Exception:
     CORE_WATCHLIST = ["MRVL", "HOOD", "GOOGL", "SNDK", "MU", "AAPL", "VRT", "CRWV", "PLTR", "AMD"]
+    CORE_A_TIER_SET = frozenset()
 from mtf_signals import analyze_h1_trigger
 from scripts.backtest_watchlist_swing import backtest_symbol, summarize_history
 from trade_journal import journal_stats
-from entry_labels import ENTER_MAYBE, ENTER_NO, ENTER_YES, label_enter_ok, screen_layer
+from entry_labels import (
+    ENTER_MAYBE,
+    ENTER_NO,
+    ENTER_SOFT,
+    ENTER_YES,
+    coerce_rr,
+    digest_bucket,
+    filter_layers_for_min_level,
+    label_enter_ok,
+    screen_layer,
+    soft_rr_from_row,
+)
 from trade_sop import build_trade_sop, format_win_rate
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -130,13 +142,22 @@ def _block_reasons(sop, h1_trigger) -> str:
 def render_scan(period: str, interval: str, period_label: str) -> None:
     st.markdown("## Watchlist 掃描")
     st.caption(
-        f"從 list 篩值得買 · 先看 **層級（可入場／可考慮／不入場）+ 三燈 + 掛單／止蝕／離入場** · "
+        f"從 list 篩值得買 · 先看 **層級（可入場／soft 可入場／可考慮／不入場）+ 三燈 + 掛單／止蝕／離入場** · "
         f"{period_label} · 有興趣再撳「開投資SOP」確認 · 非投資建議"
     )
+    if not CORE_A_TIER_SET:
+        st.warning(
+            "**CORE_A_TIER_SET 空白**（config import 失敗？）→ soft 可入場已停用，所有檔位顯示 B。"
+            "請檢查 config.py 後按「強制刷新」。"
+        )
     st.info(
         "目標：高勝率 · 每月數次 · 只喺開市頭 2 小時掛單／買賣。　"
-        "預設 **核心名單 + 只可入場**。　"
-        "**可入場** = 三燈無紅無黃可限價掛 E　｜　**可考慮** = 試倉／有黃燈，先入 SOP　｜　**不入場** = 觀望／回避。"
+        "預設 **核心名單 + 可入場+soft**。　"
+        "**可入場** = 硬 Confirm（三燈無紅無黃）可限價掛 E　｜　"
+        "**soft 可入場** = **A档** paper 實驗 · digest RR（rr_t1）≥0.9 · 近可考慮"
+        "（**唔係**硬 Confirm · **唔下單**）　｜　"
+        "**可考慮** = 試倉／有黃燈，先入 SOP　｜　**不入場** = 觀望／回避。　"
+        "**档位** A＝soft 資格池 · B＝永不 soft。"
     )
     scan_simple = st.toggle(
         "掃描極簡表（推荐）",
@@ -148,7 +169,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         "只掃核心高勝率名單",
         value=bool(st.session_state.get("scan_core_only", True)),
         key="scan_core_only",
-        help="MRVL / HOOD / GOOGL / SNDK / MU / AAPL / VRT / PLTR / AMD / ARM / LITE / UNH / SMH / ASML",
+        help="只用 CORE_WATCHLIST（37）；soft 可入場只限其中 A档 14 隻 paper",
     )
 
     # ---- list source ----
@@ -204,12 +225,17 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                 key="scan_mode_ui",
             )
         with c5:
+            # migrate legacy scan_min_level so Streamlit options stay valid
+            _ml = st.session_state.get("scan_min_level")
+            if _ml == "可入場+soft":
+                st.session_state["scan_min_level"] = "可入場+soft（預設）"
             min_level = st.selectbox(
                 "顯示級別",
-                ["只可入場", "可入場+可考慮", "全部"],
+                ["可入場+soft（預設）", "只 soft 可入場", "可入場+可考慮", "全部"],
                 index=0,
                 key="scan_min_level",
-                help="預設只顯示可入場；可改睇可考慮或全部",
+                help="預設＝硬 Confirm + A档 soft paper；「只 soft」睇實驗池；"
+                "「可入場+可考慮」含試倉；B 档永不 soft",
             )
         save_list = st.checkbox("寫入 scan 檔", value=True, key="scan_save_list")
 
@@ -228,12 +254,17 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     risk_pct = float(st.session_state.get("scan_risk", 1.0))
     horizon_ui = st.session_state.get("scan_horizon", "0–2周")
     mode_ui = st.session_state.get("scan_mode_ui", "A 防守版")
-    min_level = st.session_state.get("scan_min_level", "只可入場")
+    min_level = st.session_state.get("scan_min_level", "可入場+soft（預設）")
     save_list = bool(st.session_state.get("scan_save_list", True))
     HKD_PER_USD = 7.8
     capital = float(capital_hkd) / HKD_PER_USD
     risk_hkd = capital_hkd * risk_pct / 100.0
-    primary_horizon = "h1" if horizon_ui == "0–2周" else "h2"
+    # Accept en-dash / hyphen / bare h1|h2 so stale session values stay correct
+    _hu = str(horizon_ui or "").strip().lower().replace("-", "–")
+    if _hu in ("h2", "2–4周") or _hu.startswith("2"):
+        primary_horizon = "h2"
+    else:
+        primary_horizon = "h1"
     mode_key = "aggressive" if str(mode_ui).startswith("B") else "defensive"
     st.session_state["sop_mode"] = mode_key
     st.caption(
@@ -459,8 +490,25 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                     rr_l = getattr(sop, "rr_light", "") or ""
                     any_red = "red" in (pos_l, wr_l, rr_l)
                     any_yellow = "yellow" in (pos_l, wr_l, rr_l)
-                    layer = _screen_layer(
+                    layer_hard = _screen_layer(
                         sop.enter_ok, any_red=any_red, any_yellow=any_yellow
+                    )
+                    # Soft gates on digest RR (= primary plan rr_t1). Never fall back
+                    # to the non-primary horizon (h1 when user picked 2–4周).
+                    rr_for_soft = coerce_rr(getattr(sop, "rr_t1", None))
+                    if rr_for_soft is None and prim is not None:
+                        rr_for_soft = coerce_rr(getattr(prim, "rr", None))
+                    layer = digest_bucket(
+                        sop.symbol,
+                        layer=layer_hard,
+                        rr=rr_for_soft,
+                        enter_ok=sop.enter_ok,
+                        a_tier=CORE_A_TIER_SET,
+                    )
+                    core_tier = (
+                        "A"
+                        if str(sop.symbol).strip().upper() in CORE_A_TIER_SET
+                        else "B"
                     )
                     dist_pct, dist_label = _distance_to_entry(
                         sop.last_price, sop.entry_low, sop.entry_high
@@ -473,6 +521,8 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                             "名称": sop.name,
                             "模式": getattr(sop, "mode_label", mode_ui),
                             "层級": layer,
+                            "档位": core_tier,
+                            "_rr_soft": rr_for_soft,  # digest RR (rr_t1); cache rebuild must reuse
                             "结论": label_enter_ok(sop.enter_ok), "_enter_ok": sop.enter_ok,
                             "主结论": getattr(prim, "verdict", "—") if prim else "—",
                             "位置灯": _light_zh(pos_l),
@@ -522,9 +572,22 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                             "止损": sop.stop_loss,
                             "T1": sop.target_t1,
                             "T2": sop.target_t2,
-                            "R:R": getattr(h1, "rr", None) if h1 else sop.rr_t1,
-                            "期望E[R]": getattr(h1, "expectancy_r", None) if h1 else getattr(sop, "expectancy_r", None),
-                            "胜率%": getattr(h1, "win_rate_pct", None) if h1 else sop.win_rate_pct,
+                            # Legacy summary cols follow primary horizon (same as soft RR)
+                            "R:R": (
+                                getattr(prim, "rr", None)
+                                if prim is not None
+                                else sop.rr_t1
+                            ),
+                            "期望E[R]": (
+                                getattr(prim, "expectancy_r", None)
+                                if prim is not None
+                                else getattr(sop, "expectancy_r", None)
+                            ),
+                            "胜率%": (
+                                getattr(prim, "win_rate_pct", None)
+                                if prim is not None
+                                else sop.win_rate_pct
+                            ),
                             "胜率档": sop.win_rate_label,
                             "稳定度": sop.stability_score,
                             "稳定档": sop.stability_label,
@@ -578,18 +641,47 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         return
 
     for row in rows_all:
-        if "层級" not in row:
+        lights = (row.get("位置灯"), row.get("胜率灯"), row.get("划算灯"))
+        any_red = any(x in ("紅", "红", "red") for x in lights)
+        any_yellow = any(x in ("黃", "黄", "yellow") for x in lights)
+        enter_ok = row.get("_enter_ok") or ""
+        # Rebuild hard layer, then digest_bucket may promote A-tier near-maybe to soft.
+        if enter_ok:
+            hard = screen_layer(enter_ok, any_red=any_red, any_yellow=any_yellow)
+        else:
+            # Legacy cache without _enter_ok: map display 结论 / 层級 back to hard.
             enter = row.get("结论") or ""
-            lights = (row.get("位置灯"), row.get("胜率灯"), row.get("划算灯"))
-            any_red = any(x in ("紅", "红") for x in lights)
-            if enter == "适合入场" and not any_red:
-                row["层級"] = ENTER_YES
-            elif enter in ("适合入场", "谨慎试仓"):
-                row["层級"] = ENTER_MAYBE
-            elif enter == "观望":
-                row["层級"] = ENTER_NO
+            existing = row.get("层級")
+            if enter in ("适合入场", ENTER_YES):
+                hard = screen_layer(
+                    "适合入场", any_red=any_red, any_yellow=any_yellow
+                )
+            elif enter in ("谨慎试仓", ENTER_MAYBE, ENTER_SOFT):
+                hard = ENTER_MAYBE
+            elif existing == ENTER_YES:
+                hard = ENTER_YES
+            elif existing in (ENTER_SOFT, ENTER_MAYBE):
+                hard = ENTER_MAYBE
+            elif existing == ENTER_NO:
+                hard = ENTER_NO
             else:
-                row["层級"] = ENTER_NO
+                hard = ENTER_NO
+        # Prefer explicit _rr_soft (incl. None); legacy rows fall back to display R:R.
+        rr_val = soft_rr_from_row(row)
+        sym = str(row.get("代码") or "")
+        row["层級"] = digest_bucket(
+            sym,
+            layer=hard,
+            rr=rr_val,
+            enter_ok=enter_ok or None,
+            a_tier=CORE_A_TIER_SET,
+        )
+        if "_rr_soft" not in row:
+            row["_rr_soft"] = rr_val
+        row.setdefault(
+            "档位",
+            "A" if sym.strip().upper() in CORE_A_TIER_SET else "B",
+        )
         if "离入場" not in row or "离入場%" not in row:
             pct, label = _distance_to_entry(
                 row.get("现价"),
@@ -631,19 +723,12 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         history_avg_r = pd.to_numeric(df.get("歷史平均R"), errors="coerce")
         df["_hist_rank"] = history_avg_r.where(history_samples >= 5)
 
-    # filter (default: 只可入場)
-    if min_level == "只可入場":
-        show = df[df["层級"] == ENTER_YES] if "层級" in df.columns else df[_mask_enterable(df)]
-    elif min_level == "可入場+可考慮":
-        show = (
-            df[df["层級"].isin([ENTER_YES, ENTER_MAYBE])]
-            if "层級" in df.columns
-            else df[_mask_enterable(df)]
-        )
-    elif min_level == "可入場+可考慮":
-        show = df[_mask_enterable(df)]
+    # filter (default: 可入場+soft = hard Confirm + A-tier soft)
+    if "层級" not in df.columns:
+        show = df[_mask_enterable(df)] if min_level != "全部" else df
     else:
-        show = df
+        allowed = filter_layers_for_min_level(min_level)
+        show = df if allowed is None else df[df["层級"].isin(allowed)]
 
     # Keep every opportunity; historical expectancy only prioritizes within the same verdict.
     order_map = {ENTER_YES: 0, ENTER_MAYBE: 1, ENTER_NO: 2}
@@ -675,11 +760,21 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     # summary metrics
     n_all = len(df)
     n_confirm = int((df["层級"] == ENTER_YES).sum()) if "层級" in df.columns else 0
+    n_soft = int((df["层級"] == ENTER_SOFT).sum()) if "层級" in df.columns else 0
     n_early = int((df["层級"] == ENTER_MAYBE).sum()) if "层級" in df.columns else 0
-    n_suit = int((df["_enter_ok"] == "适合入场").sum()) if "_enter_ok" in df.columns else int((df["结论"] == ENTER_YES).sum())
-    n_caut = int((df["结论"] == "谨慎试仓").sum())
-    n_wait = int((df["结论"] == "观望").sum())
-    n_avoid = int((df["结论"] == "回避").sum())
+    if "_enter_ok" in df.columns:
+        n_suit = int((df["_enter_ok"] == "适合入场").sum())
+        n_caut = int((df["_enter_ok"] == "谨慎试仓").sum())
+        n_wait = int((df["_enter_ok"] == "观望").sum())
+        n_avoid = int((df["_enter_ok"] == "回避").sum())
+    else:
+        # Legacy rows: 结论 already mapped via label_enter_ok
+        n_suit = int((df["结论"] == ENTER_YES).sum()) if "结论" in df.columns else 0
+        n_caut = int((df["结论"] == ENTER_MAYBE).sum()) if "结论" in df.columns else 0
+        n_wait = 0
+        n_avoid = int((df["结论"] == ENTER_NO).sum()) if "结论" in df.columns else 0
+    n_a = int((df["档位"] == "A").sum()) if "档位" in df.columns else 0
+    n_b = int((df["档位"] == "B").sum()) if "档位" in df.columns else 0
     n_enter = n_suit + n_caut
     wr_enter = pd.to_numeric(
         df.loc[_mask_enterable(df), "胜率%"], errors="coerce"
@@ -692,26 +787,29 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
     n_earn = int((df["财报"] == "是").sum()) if "财报" in df.columns else 0
     n_blocked = int((df["阻擋"].astype(str).str.len() > 0).sum()) if "阻擋" in df.columns else 0
 
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("可入場", n_confirm, "可限價執行候選")
-    m2.metric("可考慮", n_early, "試倉／有黃燈")
-    m3.metric(
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    m1.metric("可入場", n_confirm, "硬 Confirm")
+    m2.metric("soft 可入場", n_soft, "A紙上·唔下單")
+    m3.metric("可考慮", n_early, "試倉／有黃燈")
+    m4.metric(
         "入場率",
         f"{100 * n_enter / n_all:.0f}%" if n_all else "—",
         f"{n_enter}/{n_all}",
     )
-    m4.metric(
+    m5.metric(
         "候選平均勝率",
         f"{wr_enter.mean():.0f}%" if len(wr_enter) else "—",
     )
-    m5.metric(
+    m6.metric(
         "候選平均E[R]",
         f"{exp_enter.mean():+.2f}" if len(exp_enter) else "—",
     )
     st.caption(
-        f"適合 {n_suit} · 謹慎 {n_caut} · 观望 {n_wait} · 回避 {n_avoid} · "
+        f"SOP：適合 {n_suit} · 謹慎 {n_caut} · 观望 {n_wait} · 回避 {n_avoid} · "
+        f"档位 A {n_a} / B {n_b} · "
         f"財報標誌 {n_earn} · 有阻擋 {n_blocked} · "
-        f"IV事件 {n_iv_event} · 放量下跌 {n_vol_dump}"
+        f"IV事件 {n_iv_event} · 放量下跌 {n_vol_dump} · "
+        f"soft 只限 A档 · RR≥0.9 paper（顯示用，唔下單）"
     )
     realized = journal_stats()
     if realized.get("closed"):
@@ -729,8 +827,8 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                 f"{realized['calibration_samples']}）；接近 0 较理想。"
             )
 
-    # Sort: 可入場 > 可考慮 > 不入場
-    layer_ord = {ENTER_YES: 0, ENTER_MAYBE: 1, ENTER_NO: 2}
+    # Sort: 可入場 > soft 可入場 > 可考慮 > 不入場
+    layer_ord = {ENTER_YES: 0, ENTER_SOFT: 1, ENTER_MAYBE: 2, ENTER_NO: 3}
     if "层級" in show.columns and not show.empty:
         show = show.copy()
         show["_layer_ord"] = show["层級"].map(lambda x: layer_ord.get(x, 9))
@@ -750,6 +848,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         ).drop(columns=["_layer_ord"], errors="ignore")
 
     st.markdown("### 篩選結果（先睇呢張表）")
+    st.caption("表中 **R:R** = 主周期 digest RR（同 soft 門檻用嘅 rr_t1）；唔係另一個周期嘅數。")
     if show.empty:
         st.warning("以目前過濾條件，沒有可顯示標的。可改「顯示級別」為「全部」。")
     else:
@@ -764,7 +863,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                 "揀一隻開投資SOP確認",
                 pick_opts,
                 key="scan_sop_pick",
-                help="可入場／可考慮都建議入 SOP 睇清 E／S／T 先落單",
+                help="可入場／soft 可入場／可考慮都建議入 SOP 睇清 E／S／T 先落單（soft 純顯示）",
             )
         with pc2:
             st.write("")
@@ -787,6 +886,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
             )
             display_cols = [
                 "代码",
+                "档位",
                 "层級",
                 "主结论",
                 "三燈",
@@ -794,6 +894,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                 "现价",
                 "掛單",
                 "止蝕",
+                "R:R",
                 "离入場",
                 "阻擋",
                 "1H",
@@ -802,6 +903,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
             display_cols = [
                 "代码",
                 "名称",
+                "档位",
                 "层級",
                 "主结论",
                 "结论",
@@ -840,15 +942,20 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
         st.markdown("### 候選詳情")
         for _, row in enterable.iterrows():
             layer = row.get("层級", "")
-            title = f"{row['代码']} · {layer} · {row.get('主结论', row['结论'])}（{row['适合度']:.0f}）"
+            tier = row.get("档位", "")
+            title = f"{row['代码']} · {tier} · {layer} · {row.get('主结论', row['结论'])}（{row['适合度']:.0f}）"
             if layer == ENTER_YES:
                 box = st.success
+            elif layer == ENTER_SOFT:
+                box = st.info
             elif layer == ENTER_MAYBE:
                 box = st.warning
             else:
                 box = st.info
             with st.expander(title, expanded=False):
-                box(f"**{row['结论']}** · {row['名称']} · 層級 **{layer}**")
+                tier_note = f" · 档位 **{tier}**" if tier else ""
+                soft_note = " · soft paper（唔下單）" if layer == ENTER_SOFT else ""
+                box(f"**{row['结论']}** · {row['名称']} · 層級 **{layer}**{tier_note}{soft_note}")
                 lights = (
                     f"位置 **{row.get('位置灯', '—')}** · "
                     f"胜率 **{row.get('胜率灯', '—')}** · "
@@ -897,7 +1004,7 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
                     st.rerun()
 
     with st.expander("完整結果表（含回避/观望 · 含板塊/量能/IV）", expanded=False):
-        drop_cols = ["立刻动作", "失效", "板块说明", "量能说明", "IV说明"]
+        drop_cols = ["立刻动作", "失效", "板块说明", "量能说明", "IV说明", "_enter_ok", "_rr_soft"]
         st.dataframe(
             df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore"),
             width="stretch",
@@ -906,6 +1013,8 @@ def render_scan(period: str, interval: str, period_label: str) -> None:
 
     st.caption(
         "與投資SOP同一套 **三灯裁决**（位置 · 胜率 · 划算）· "
-        "可入場／可考慮只係篩選層級，落單前仍要入投資SOP · "
+        "可入場／soft 可入場／可考慮只係篩選層級，落單前仍要入投資SOP · "
+        "soft = **A档** paper 實驗（digest RR／rr_t1 ≥0.9），**B 永不 soft** · "
+        "硬 Confirm 唔會被 soft 覆蓋 · 唔產生經紀落單 · "
         "每筆按 5000 HKD 估算賺蝕 · Yahoo 可能延遲 · 非投資建議 · 改規則後按「強制刷新」"
     )
