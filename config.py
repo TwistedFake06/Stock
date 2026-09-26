@@ -67,3 +67,24 @@ CORE_WATCHLIST = [
     "WMT",
     "DELL",
 ]
+
+# Soft-Confirm paper experiment (2026-09-26 → ~2026-10-10): A-tier only may get soft 可入場.
+# Full CORE_WATCHLIST remains the scan universe; B never soft.
+CORE_A_TIER = [
+    "LITE",
+    "UNH",
+    "COHR",
+    "SMR",
+    "SNDK",
+    "WDC",
+    "MU",
+    "GOOGL",
+    "VRT",
+    "RXRX",
+    "AAPL",
+    "AMD",
+    "RKLB",
+    "PLTR",
+]
+CORE_A_TIER_SET = frozenset(CORE_A_TIER)
+CORE_B_TIER = [s for s in CORE_WATCHLIST if s not in CORE_A_TIER_SET]

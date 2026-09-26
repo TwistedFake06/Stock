@@ -1,0 +1,71 @@
+Watchlist historical validation CORE-37 (simplified swing, NOT live guarantee)
+list=37 period=2y horizon=10d risk_1R=500.0HKD months=24
+
+=== PORTFOLIO ===
+trades: 855
+months: 24
+entries_per_month_full37: 35.625
+win_rate_trade_weighted: 44.09356725146199
+avg_r_trade_weighted: 0.029214035087719293
+profit_per_month_hkd_sum: 520.3749999999997
+
+=== TIERS ===
+A_count: 14
+B_count: 23
+A_entries_per_month_sum: 14.458333333333334
+est_Confirm_strict_A_pm (x0.275): 3.98
+est_A+strict+first2h_pm (x0.275x0.45): 1.79
+est_full37_strict_pm (x0.275): 9.80
+est_full37_strict+first2h_pm: 4.41
+
+=== A-TIER (hist-usable high WR) ===
+symbol  trades confidence_tag  entries_per_month  win_rate    avg_r  profit_per_month_hkd tier
+  LITE      29             ok           1.208333 55.172414 0.397793            240.333333    A
+   UNH      18             ok           0.750000 55.555556 0.388556            145.708333    A
+  COHR      38             ok           1.583333 57.894737 0.387605            306.854167    A
+   SMR      14             ok           0.583333 57.142857 0.384857            112.250000    A
+  SNDK      23             ok           0.958333 60.869565 0.369957            177.270833    A
+   WDC      28             ok           1.166667 57.142857 0.340857            198.833333    A
+    MU      21             ok           0.875000 52.380952 0.332571            145.500000    A
+ GOOGL      31             ok           1.291667 54.838710 0.285645            184.479167    A
+   VRT      24             ok           1.000000 45.833333 0.246917            123.458333    A
+  RXRX      23             ok           0.958333 52.173913 0.234565            112.395833    A
+  AAPL      28             ok           1.166667 46.428571 0.192393            112.229167    A
+   AMD      23             ok           0.958333 47.826087 0.172870             82.833333    A
+  RKLB      19             ok           0.791667 52.631579 0.154842             61.291667    A
+  PLTR      28             ok           1.166667 46.428571 0.112036             65.354167    A
+
+=== B-TIER (watch only) ===
+symbol  trades confidence_tag  entries_per_month  win_rate     avg_r  profit_per_month_hkd tier
+  ORCL      21             ok           0.875000 42.857143  0.121667             53.229167    B
+  SMCI      21             ok           0.875000 42.857143  0.109762             48.020833    B
+    BE      29             ok           1.208333 44.827586  0.086379             52.187500    B
+  INTC      27             ok           1.125000 44.444444  0.075407             42.416667    B
+   MUR      25             ok           1.041667 44.000000  0.051120             26.625000    B
+  DELL      28             ok           1.166667 42.857143  0.023071             13.458333    B
+  QUBT      12             ok           0.500000 41.666667  0.004917              1.229167    B
+  RGTI      18             ok           0.750000 44.444444  0.002889              1.083333    B
+  QCOM      31             ok           1.291667 45.161290 -0.036645            -23.666667    B
+  NFLX      20             ok           0.833333 45.000000 -0.039950            -16.645833    B
+  NBIS      22             ok           0.916667 40.909091 -0.072409            -33.187500    B
+  IONQ      16             ok           0.666667 37.500000 -0.129125            -43.041667    B
+  ONDS      15             ok           0.625000 40.000000 -0.132933            -41.541667    B
+   QQQ      28             ok           1.166667 42.857143 -0.190964           -111.395833    B
+  MSFT      21             ok           0.875000 33.333333 -0.286714           -125.437500    B
+  NVDA      34             ok           1.416667 32.352941 -0.309235           -219.041667    B
+  SOXX      29             ok           1.208333 31.034483 -0.337069           -203.645833    B
+  AMZN      27             ok           1.125000 29.629630 -0.365148           -205.395833    B
+  TSLA      19             ok           0.791667 31.578947 -0.365947           -144.854167    B
+  META      18             ok           0.750000 27.777778 -0.381611           -143.104167    B
+   WMT      30             ok           1.250000 30.000000 -0.429367           -268.354167    B
+  CRWV      17             ok           0.708333 17.647059 -0.585471           -207.354167    B
+  SPCX       0         insuff           0.000000       NaN       NaN                   NaN    B
+
+=== WORKABLE CHECK ===
+symbols_with_trades>=5: 36/37
+symbols_confidence_ok>=10trades: 36
+among_valid win_rate>=45%: 16
+among_valid avg_r>0: 22
+among_valid avg_r<=0: 14
+WORKABLE_A_POOL: True
+NOTE: Confirm live filters (lights + RR + first2h) cut hist enterable sharply; use STRICT_FRAC from prior wr_lift strong+bias>=18+rr>=1.2 ≈27.5%.

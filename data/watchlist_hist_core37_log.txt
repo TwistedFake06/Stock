@@ -1,0 +1,74 @@
+[1/37] GOOGL
+  trades=31 wr=54.83870967741935 avg_r=0.28564516129032247 tag=ok tier=A
+[2/37] NVDA
+  trades=34 wr=32.35294117647059 avg_r=-0.3092352941176471 tag=ok tier=B
+[3/37] MSFT
+  trades=21 wr=33.333333333333336 avg_r=-0.2867142857142858 tag=ok tier=B
+[4/37] TSLA
+  trades=19 wr=31.57894736842105 avg_r=-0.3659473684210527 tag=ok tier=B
+[5/37] META
+  trades=18 wr=27.77777777777778 avg_r=-0.3816111111111111 tag=ok tier=B
+[6/37] SNDK
+  trades=23 wr=60.869565217391305 avg_r=0.36995652173913046 tag=ok tier=A
+[7/37] MU
+  trades=21 wr=52.38095238095238 avg_r=0.33257142857142863 tag=ok tier=A
+[8/37] INTC
+  trades=27 wr=44.44444444444444 avg_r=0.07540740740740744 tag=ok tier=B
+[9/37] ORCL
+  trades=21 wr=42.857142857142854 avg_r=0.12166666666666671 tag=ok tier=B
+[10/37] AMD
+  trades=23 wr=47.82608695652174 avg_r=0.1728695652173913 tag=ok tier=A
+[11/37] AAPL
+  trades=28 wr=46.42857142857143 avg_r=0.1923928571428571 tag=ok tier=A
+[12/37] AMZN
+  trades=27 wr=29.62962962962963 avg_r=-0.36514814814814806 tag=ok tier=B
+[13/37] SMCI
+  trades=21 wr=42.857142857142854 avg_r=0.1097619047619048 tag=ok tier=B
+[14/37] IONQ
+  trades=16 wr=37.5 avg_r=-0.12912499999999993 tag=ok tier=B
+[15/37] RGTI
+  trades=18 wr=44.44444444444444 avg_r=0.002888888888888904 tag=ok tier=B
+[16/37] QUBT
+  trades=12 wr=41.666666666666664 avg_r=0.004916666666666662 tag=ok tier=B
+[17/37] ONDS
+  trades=15 wr=40.0 avg_r=-0.13293333333333332 tag=ok tier=B
+[18/37] QCOM
+  trades=31 wr=45.16129032258065 avg_r=-0.03664516129032257 tag=ok tier=B
+[19/37] WDC
+  trades=28 wr=57.142857142857146 avg_r=0.34085714285714275 tag=ok tier=A
+[20/37] LITE
+  trades=29 wr=55.172413793103445 avg_r=0.3977931034482759 tag=ok tier=A
+[21/37] VRT
+  trades=24 wr=45.833333333333336 avg_r=0.24691666666666667 tag=ok tier=A
+[22/37] CRWV
+  trades=17 wr=17.647058823529413 avg_r=-0.5854705882352941 tag=ok tier=B
+[23/37] MUR
+  trades=25 wr=44.0 avg_r=0.05111999999999999 tag=ok tier=B
+[24/37] NFLX
+  trades=20 wr=45.0 avg_r=-0.03995000000000003 tag=ok tier=B
+[25/37] NBIS
+  trades=22 wr=40.90909090909091 avg_r=-0.07240909090909092 tag=ok tier=B
+[26/37] UNH
+  trades=18 wr=55.55555555555556 avg_r=0.38855555555555543 tag=ok tier=A
+[27/37] PLTR
+  trades=28 wr=46.42857142857143 avg_r=0.11203571428571424 tag=ok tier=A
+[28/37] RXRX
+  trades=23 wr=52.17391304347826 avg_r=0.23456521739130434 tag=ok tier=A
+[29/37] SMR
+  trades=14 wr=57.142857142857146 avg_r=0.38485714285714295 tag=ok tier=A
+[30/37] BE
+  trades=29 wr=44.827586206896555 avg_r=0.08637931034482758 tag=ok tier=B
+[31/37] COHR
+  trades=38 wr=57.89473684210526 avg_r=0.3876052631578946 tag=ok tier=A
+[32/37] QQQ
+  trades=28 wr=42.857142857142854 avg_r=-0.19096428571428567 tag=ok tier=B
+[33/37] SOXX
+  trades=29 wr=31.03448275862069 avg_r=-0.3370689655172414 tag=ok tier=B
+[34/37] SPCX
+  trades=0 wr=None avg_r=None tag=insuff tier=B
+[35/37] RKLB
+  trades=19 wr=52.63157894736842 avg_r=0.1548421052631579 tag=ok tier=A
+[36/37] WMT
+  trades=30 wr=30.0 avg_r=-0.4293666666666667 tag=ok tier=B
+[37/37] DELL
+  trades=28 wr=42.857142857142854 avg_r=0.023071428571428545 tag=ok tier=B

@@ -10,7 +10,7 @@ import pandas as pd
 import yfinance as yf
 
 # US-only quick list (no HK / A-share)
-# 常用置顶：MU / SNDK；�???已选热?�票（�??��?龙头?��? ETF�?QUICK_PIN = ["MU", "SNDK"]
+# 常用置顶：MU / SNDK；�???已选热?�票（�??��?龙头?��? ETF�?QUICK_PIN = ["MU", "SNDK"]
 DEFAULT_WATCHLIST = [
     "MU",
     "SNDK",
@@ -70,19 +70,19 @@ def filter_us_only(symbols: list[str]) -> list[str]:
 
 
 PERIOD_MAP = {
-    "1??: "1mo",
-    "3??: "3mo",
-    "6??: "6mo",
-    "1�?: "1y",
-    "2�?: "2y",
-    "5�?: "5y",
-    "?��?: "max",
+    "1月": "1mo",
+    "3月": "3mo",
+    "6月": "6mo",
+    "1年": "1y",
+    "2年": "2y",
+    "5年": "5y",
+    "最大": "max",
 }
 
 INTERVAL_MAP = {
-    "?�线": "1d",
-    "?�线": "1wk",
-    "?�线": "1mo",
+    "日线": "1d",
+    "周线": "1wk",
+    "月线": "1mo",
 }
 
 # Lazy Streamlit cache wrapper (works on Cloud + local streamlit run)
