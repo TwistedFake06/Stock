@@ -16,10 +16,12 @@ from entry_labels import (
     ENTER_SOFT,
     ENTER_MAYBE,
     ENTER_NO,
+    HARD_RR_MIN,
     SOFT_RR_MIN,
     coerce_rr,
     digest_bucket,
     filter_layers_for_min_level,
+    is_hard_enter,
     is_soft_enter,
     screen_layer,
     soft_rr_from_row,
@@ -110,10 +112,40 @@ def test_hard_yes_not_also_soft():
     ) is False
 
 
+def test_realistic_hard_rr_floor_and_soft_boundary():
+    assert HARD_RR_MIN == 1.0
+    assert is_hard_enter(
+        "谨慎试仓", rr=1.0, any_red=False, any_yellow=False
+    ) is True
+    assert digest_bucket(
+        "WDC",
+        layer=ENTER_MAYBE,
+        rr=1.0,
+        enter_ok="谨慎试仓",
+        a_tier=CORE_A_TIER_SET,
+        any_red=False,
+        any_yellow=False,
+    ) == ENTER_YES
+    assert digest_bucket(
+        "WDC",
+        layer=ENTER_MAYBE,
+        rr=0.95,
+        enter_ok="谨慎试仓",
+        a_tier=CORE_A_TIER_SET,
+        any_red=False,
+        any_yellow=False,
+    ) == ENTER_SOFT
+    assert is_hard_enter(
+        "谨慎试仓", rr=1.0, any_red=True, any_yellow=False
+    ) is False
+
+
 def test_hard_screen_layer_unchanged():
     assert screen_layer("适合入场", any_red=False, any_yellow=False) == ENTER_YES
     assert screen_layer("适合入场", any_red=False, any_yellow=True) == ENTER_MAYBE
     assert screen_layer("谨慎试仓", any_red=False, any_yellow=True) == ENTER_MAYBE
+    assert screen_layer("谨慎试仓", any_red=False, any_yellow=False, rr=1.0) == ENTER_YES
+    assert screen_layer("谨慎试仓", any_red=False, any_yellow=False, rr=0.95) == ENTER_MAYBE
     assert screen_layer("观望", any_red=False, any_yellow=False) == ENTER_NO
 
 

@@ -14,7 +14,7 @@ ENTER_MAYBE = "可考慮"
 ENTER_NO = "不入場"
 
 # Soft-Confirm paper experiment floors (digest RR field = rr_t1)
-HARD_RR_MIN = 1.2  # documented Confirm strict context; hard path still via screen_layer
+HARD_RR_MIN = 1.0  # realistic hard Confirm floor for 可入場
 SOFT_RR_MIN = 0.9  # A-tier soft 可入場 only
 
 _ENTER_OK_TO_LABEL = {
@@ -69,13 +69,30 @@ def label_multi_tier(tier: str | None) -> str:
     return _TIER_TO_LABEL.get(s, ENTER_NO if not s else s)
 
 
-def screen_layer(enter_ok: str, *, any_red: bool, any_yellow: bool) -> str:
+def screen_layer(
+    enter_ok: str,
+    *,
+    any_red: bool,
+    any_yellow: bool,
+    rr: object | None = None,
+    hard_rr_min: float = HARD_RR_MIN,
+) -> str:
     """Simple layer for watchlist scan: 可入場 / 可考慮 / 不入場.
 
-    Hard 可入場 = Confirm (适合入场 + no red/yellow). RR≥1.2 is the hist/strict
-    Confirm context baked into lights/enter_ok; this helper stays unchanged.
+    When ``rr`` is supplied, hard 可入場 requires a suitable/full or
+    cautious entry, all lights green, and RR at least ``hard_rr_min``. Omitting
+    ``rr`` preserves the legacy light-only screen for callers that have no RR yet.
     """
-    if enter_ok == "适合入场" and not any_red and not any_yellow:
+    if rr is not None:
+        if is_hard_enter(
+            enter_ok,
+            rr=rr,
+            any_red=any_red,
+            any_yellow=any_yellow,
+            hard_rr_min=hard_rr_min,
+        ):
+            return ENTER_YES
+    elif enter_ok == "适合入场" and not any_red and not any_yellow:
         return ENTER_YES
     if enter_ok in ("适合入场", "谨慎试仓"):
         return ENTER_MAYBE
@@ -104,6 +121,29 @@ def _rr_ok(rr: float | None, floor: float) -> bool:
     return v >= float(floor)
 
 
+def is_hard_enter(
+    enter_ok: str | None,
+    *,
+    rr: object,
+    any_red: bool,
+    any_yellow: bool,
+    hard_rr_min: float = HARD_RR_MIN,
+) -> bool:
+    """Return whether an entry qualifies as hard 可入場.
+
+    Hard status is deliberately independent of tier: the entry decision must
+    be suitable/full or cautious, every traffic light must be green, and RR
+    must meet the realistic hard floor.
+    """
+    eo = (enter_ok or "").strip()
+    return (
+        eo in _MAYBE_OR_CLOSE_ENTER_OK
+        and not any_red
+        and not any_yellow
+        and _rr_ok(rr, hard_rr_min)
+    )
+
+
 def soft_rr_from_row(row: dict) -> float | None:
     """RR for soft digest rebuild from a scan cache row.
 
@@ -129,6 +169,8 @@ def is_soft_enter(
     enter_ok: str | None = None,
     a_tier: Collection[str] | None = None,
     soft_rr_min: float = SOFT_RR_MIN,
+    any_red: bool | None = None,
+    any_yellow: bool | None = None,
 ) -> bool:
     """A-tier soft 可入場: not hard, RR≥soft_rr_min, 可考慮 or close. B never soft.
 
@@ -143,13 +185,23 @@ def is_soft_enter(
     sym = (symbol or "").strip().upper()
     if not sym or sym not in {str(x).strip().upper() for x in a_tier}:
         return False
-    if layer == ENTER_YES:
-        return False
     if not _rr_ok(rr, soft_rr_min):
+        return False
+    if any_red is None and any_yellow is None:
+        hard = layer == ENTER_YES and _rr_ok(rr, HARD_RR_MIN)
+    else:
+        hard = is_hard_enter(
+            enter_ok,
+            rr=rr,
+            any_red=bool(any_red),
+            any_yellow=bool(any_yellow),
+        )
+    if hard:
         return False
     if layer == ENTER_MAYBE:
         return True
-    # "close": enter_ok still trial/full but layered 不入場 by lights (rare)
+    # A non-hard full/cautious entry is a close/soft candidate (usually due to
+    # a light or the RR floor), while B remains excluded above.
     eo = (enter_ok or "").strip()
     return eo in _MAYBE_OR_CLOSE_ENTER_OK
 
@@ -161,12 +213,34 @@ def digest_bucket(
     rr: float | None,
     enter_ok: str | None = None,
     a_tier: Collection[str] | None = None,
+    any_red: bool | None = None,
+    any_yellow: bool | None = None,
 ) -> str:
-    """Bucket for Daily Confirm digest: 可入場 / soft 可入場 / 可考慮 / 不入場."""
-    if layer == ENTER_YES:
+    """Bucket for Daily Confirm digest: 可入場 / soft 可入場 / 可考慮 / 不入場.
+
+    Explicit traffic-light values allow a cautious, all-green RR>=1.0 row to
+    become hard 可入場 instead of soft. When lights are omitted, an
+    existing hard screen layer remains hard only when its RR clears the floor.
+    """
+    if any_red is None and any_yellow is None:
+        hard = layer == ENTER_YES and _rr_ok(rr, HARD_RR_MIN)
+    else:
+        hard = is_hard_enter(
+            enter_ok,
+            rr=rr,
+            any_red=bool(any_red),
+            any_yellow=bool(any_yellow),
+        )
+    if hard:
         return ENTER_YES
     if is_soft_enter(
-        symbol, layer=layer, rr=rr, enter_ok=enter_ok, a_tier=a_tier
+        symbol,
+        layer=layer,
+        rr=rr,
+        enter_ok=enter_ok,
+        a_tier=a_tier,
+        any_red=any_red,
+        any_yellow=any_yellow,
     ):
         return ENTER_SOFT
     if layer == ENTER_MAYBE:

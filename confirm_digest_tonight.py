@@ -151,6 +151,8 @@ def main() -> int:
                 rr=rr_val,
                 enter_ok=sop.enter_ok,
                 a_tier=CORE_A_TIER_SET,
+                any_red=any_red,
+                any_yellow=any_yellow,
             )
             core_tier = "A" if sop.symbol in CORE_A_TIER_SET else "B"
 

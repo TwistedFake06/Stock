@@ -1691,7 +1691,7 @@ def _build_swing_plan(
 
 # ---- Legacy soft floors for _enter_decision ranking (score only) ----
 # 真正做不做以 swing 双模式门檻为准；下列常数仅用于综合分硬挡极端情况
-MIN_RR_FULL = 1.10
+MIN_RR_FULL = 1.0
 MIN_RR_CAUTIOUS = 0.90
 MIN_EXP_FULL = 0.10
 MIN_EXP_CAUTIOUS = 0.0
