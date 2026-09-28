@@ -1,44 +1,26 @@
 {
-  "hkt": "2026-09-22 22:13 HKT",
-  "et": "2026-09-22 10:13 ET",
-  "us_session": "rth",
+  "hkt": "2026-09-26 23:11 HKT",
+  "et": "2026-09-26 11:11 ET",
+  "us_session": "closed",
   "source": "windows-DESKTOP-I6GFS6B",
-  "core_n": 36,
+  "core_n": 37,
+  "experiment": {
+    "name": "soft-Confirm A-tier",
+    "start": "2026-09-26",
+    "end": "2026-10-10",
+    "mode": "paper",
+    "hard_rr_min": 1.2,
+    "soft_rr_min": 0.9,
+    "a_tier_n": 14,
+    "note": "A-tier soft 可入場 RR≥0.9 when 可考慮/close; B never soft; no orders"
+  },
   "可入場": [],
-  "可考慮": [
-    {
-      "symbol": "SNDK",
-      "line": "净R:R约 0.88（偏紧，最多试仓） · 已在區內",
-      "lights": "位綠/勝綠/劃黃",
-      "enter_ok": "谨慎试仓",
-      "last": 1766.64
-    },
-    {
-      "symbol": "MU",
-      "line": "财报约 8 天内 → 最多试仓，勿满仓 · 高出 2.0%",
-      "lights": "位黃/勝綠/劃黃",
-      "enter_ok": "谨慎试仓",
-      "last": 1043.96
-    },
-    {
-      "symbol": "WDC",
-      "line": "净R:R约 0.87（偏紧，最多试仓） · 差 4.3%",
-      "lights": "位綠/勝綠/劃黃",
-      "enter_ok": "谨慎试仓",
-      "last": 448.17
-    },
-    {
-      "symbol": "COHR",
-      "line": "净R:R约 0.88（偏紧，最多试仓） · 已在區內",
-      "lights": "位綠/勝綠/劃黃",
-      "enter_ok": "谨慎试仓",
-      "last": 321.52
-    }
-  ],
-  "不入場_count": 32,
+  "soft_可入場": [],
+  "可考慮": [],
+  "不入場_count": 37,
   "多策略_top": [
     {
-      "symbol": "AMD",
+      "symbol": "DELL",
       "tier": "可入場",
       "n": 5,
       "labels": [
@@ -50,7 +32,7 @@
       ]
     },
     {
-      "symbol": "INTC",
+      "symbol": "LITE",
       "tier": "可入場",
       "n": 5,
       "labels": [
@@ -62,7 +44,7 @@
       ]
     },
     {
-      "symbol": "META",
+      "symbol": "MSFT",
       "tier": "可入場",
       "n": 5,
       "labels": [
@@ -74,7 +56,7 @@
       ]
     },
     {
-      "symbol": "QQQ",
+      "symbol": "NBIS",
       "tier": "可入場",
       "n": 5,
       "labels": [
@@ -86,7 +68,7 @@
       ]
     },
     {
-      "symbol": "RXRX",
+      "symbol": "ONDS",
       "tier": "可入場",
       "n": 5,
       "labels": [
@@ -98,7 +80,30 @@
       ]
     },
     {
-      "symbol": "AMZN",
+      "symbol": "QCOM",
+      "tier": "可入場",
+      "n": 5,
+      "labels": [
+        "看多",
+        "入場區",
+        "量能",
+        "趨勢對齊",
+        "MACD轉強"
+      ]
+    },
+    {
+      "symbol": "AAPL",
+      "tier": "可入場",
+      "n": 4,
+      "labels": [
+        "看多",
+        "入場區",
+        "量能",
+        "趨勢對齊"
+      ]
+    },
+    {
+      "symbol": "BE",
       "tier": "可入場",
       "n": 4,
       "labels": [
@@ -109,7 +114,7 @@
       ]
     },
     {
-      "symbol": "COHR",
+      "symbol": "CRWV",
       "tier": "可入場",
       "n": 4,
       "labels": [
@@ -125,34 +130,68 @@
       "n": 4,
       "labels": [
         "看多",
-        "入場區",
-        "趨勢對齊",
-        "MACD轉強"
-      ]
-    },
-    {
-      "symbol": "LITE",
-      "tier": "可入場",
-      "n": 4,
-      "labels": [
-        "看多",
-        "入場區",
-        "趨勢對齊",
-        "MACD轉強"
-      ]
-    },
-    {
-      "symbol": "MU",
-      "tier": "可入場",
-      "n": 4,
-      "labels": [
-        "看多",
-        "入場區",
+        "量能",
         "趨勢對齊",
         "MACD轉強"
       ]
     }
   ],
+  "多策略_看空_top": [
+    {
+      "symbol": "AMZN",
+      "tier": "偏空強",
+      "n": 3,
+      "labels": [
+        "看空",
+        "壓力／回避區",
+        "MACD轉弱"
+      ]
+    },
+    {
+      "symbol": "ORCL",
+      "tier": "偏空強",
+      "n": 3,
+      "labels": [
+        "看空",
+        "量能偏空",
+        "MACD轉弱"
+      ]
+    },
+    {
+      "symbol": "AMD",
+      "tier": "偏空留意",
+      "n": 2,
+      "labels": [
+        "壓力／回避區",
+        "MACD轉弱"
+      ]
+    },
+    {
+      "symbol": "MUR",
+      "tier": "偏空留意",
+      "n": 2,
+      "labels": [
+        "看空",
+        "MACD轉弱"
+      ]
+    },
+    {
+      "symbol": "UNH",
+      "tier": "偏空留意",
+      "n": 2,
+      "labels": [
+        "看空",
+        "壓力／回避區"
+      ]
+    }
+  ],
   "errors": [],
-  "yes_symbols": []
+  "yes_symbols": [],
+  "soft_symbols": [],
+  "counts": {
+    "可入場": 0,
+    "soft_可入場": 0,
+    "可考慮": 0,
+    "不入場": 37
+  }
 }

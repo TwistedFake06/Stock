@@ -1,0 +1,70 @@
+{
+  "title": "Monday open first-2h paper watchlist",
+  "prepared_hkt": "2026-09-27 16:58 HKT",
+  "basis": "as_of last close 2026-09-25 (Fri); weekend confirm_digest_latest emptied by session=closed",
+  "experiment": "soft-Confirm A-tier paper 2026-09-26 → ~2026-10-10; hard Confirm unchanged; no new indicator gates; no broker orders",
+  "hard_Confirm": [],
+  "priority_soft_paper": [
+    {
+      "symbol": "WDC",
+      "note": "A soft; first-2h priority",
+      "rr": 1.0,
+      "last": 456.81,
+      "enter_ok": "谨慎试仓",
+      "lights": "green/green/yellow"
+    },
+    {
+      "symbol": "COHR",
+      "note": "A soft; first-2h priority",
+      "rr": 1.01,
+      "last": 295.83,
+      "enter_ok": "谨慎试仓",
+      "lights": "green/green/yellow"
+    },
+    {
+      "symbol": "RKLB",
+      "note": "A soft; first-2h priority",
+      "rr": 1.0,
+      "last": 73.95,
+      "enter_ok": "谨慎试仓",
+      "lights": "green/green/yellow"
+    }
+  ],
+  "soft_demoted": [
+    {
+      "symbol": "VRT",
+      "note": "A soft but demote — bearish caveat; watch only unless tape strong",
+      "rr": 1.0,
+      "last": 253.28,
+      "enter_ok": "谨慎试仓",
+      "lights": "green/green/yellow"
+    }
+  ],
+  "B_可考慮_observe_only": [
+    {
+      "symbol": "ONDS",
+      "note": "B never soft; 可考慮 observe-only",
+      "rr": 1.0,
+      "last": 7.64,
+      "enter_ok": "谨慎试仓",
+      "lights": "green/yellow/yellow"
+    },
+    {
+      "symbol": "CRWV",
+      "note": "B never soft; 可考慮 observe-only",
+      "rr": 1.0,
+      "last": 87.59,
+      "enter_ok": "谨慎试仓",
+      "lights": "green/yellow/yellow"
+    }
+  ],
+  "rules": [
+    "Paper only — no broker orders",
+    "Soft = A-tier + RR(rr_t1)>=0.9 + 可考慮/close; B never soft",
+    "Hard Confirm path unchanged (screen_layer)",
+    "First 2h Mon open: prioritize WDC COHR RKLB; demote VRT; ONDS/CRWV observe",
+    "Paper fills/results go in data/soft_paper_log.csv (2-week soft experiment)."
+  ],
+  "paper_log": "data/soft_paper_log.csv",
+  "log_note": "Paper fills/results go in data/soft_paper_log.csv (2-week soft experiment)."
+}

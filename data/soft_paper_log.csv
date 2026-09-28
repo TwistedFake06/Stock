@@ -1,0 +1,5 @@
+date_hkt,session_note,symbol,core_tier,bucket,rr,price,notes,result_R,outcome
+2026-09-25,Fri asof soft (last close); Mon open first-2h paper seed,WDC,A,soft 可入場,1.0,456.81,priority first-2h; chase/bearish/tape: net RR~0.87 tight trial; bias看多 lights綠/綠/黃,,
+2026-09-25,Fri asof soft (last close); Mon open first-2h paper seed,COHR,A,soft 可入場,1.01,295.83,priority first-2h; chase/bearish/tape: net RR~0.82 tight trial; bias中性 lights綠/綠/黃,,
+2026-09-25,Fri asof soft (last close); Mon open first-2h paper seed,RKLB,A,soft 可入場,1.0,73.95,priority first-2h; chase/bearish/tape: net RR~0.86 tight trial; bias强烈看多 lights綠/綠/黃,,
+2026-09-25,Fri asof soft (last close); Mon open first-2h paper seed,VRT,A,soft 可入場,1.0,253.28,DEMOTED: A soft but bearish caveat (bear_score=2 看空/逆势); watch only unless tape strong; do not prioritize first-2h,,

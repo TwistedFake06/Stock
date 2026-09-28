@@ -1,0 +1,98 @@
+{
+  "as_of": "2026-09-25",
+  "counts": {
+    "可入場": 0,
+    "soft_可入場": 4,
+    "可考慮": 2,
+    "不入場": 31
+  },
+  "soft_symbols": [
+    "WDC",
+    "VRT",
+    "COHR",
+    "RKLB"
+  ],
+  "yes_symbols": [],
+  "maybe_symbols": [
+    "ONDS",
+    "CRWV"
+  ],
+  "soft_可入場": [
+    {
+      "symbol": "WDC",
+      "bucket": "soft 可入場",
+      "layer": "可考慮",
+      "tier": "A",
+      "enter_ok": "谨慎试仓",
+      "rr": 1.0,
+      "last": 456.81,
+      "lights": "green/green/yellow",
+      "one": "净R:R约 0.87（偏紧，最多试仓）"
+    },
+    {
+      "symbol": "VRT",
+      "bucket": "soft 可入場",
+      "layer": "可考慮",
+      "tier": "A",
+      "enter_ok": "谨慎试仓",
+      "rr": 1.0,
+      "last": 253.28,
+      "lights": "green/green/yellow",
+      "one": "逆势环境 → 最多试仓，勿满仓"
+    },
+    {
+      "symbol": "COHR",
+      "bucket": "soft 可入場",
+      "layer": "可考慮",
+      "tier": "A",
+      "enter_ok": "谨慎试仓",
+      "rr": 1.01,
+      "last": 295.83,
+      "lights": "green/green/yellow",
+      "one": "净R:R约 0.82（偏紧，最多试仓）"
+    },
+    {
+      "symbol": "RKLB",
+      "bucket": "soft 可入場",
+      "layer": "可考慮",
+      "tier": "A",
+      "enter_ok": "谨慎试仓",
+      "rr": 1.0,
+      "last": 73.95,
+      "lights": "green/green/yellow",
+      "one": "逆势环境 → 最多试仓，勿满仓"
+    }
+  ],
+  "可入場": [],
+  "可考慮": [
+    {
+      "symbol": "ONDS",
+      "bucket": "可考慮",
+      "layer": "可考慮",
+      "tier": "B",
+      "enter_ok": "谨慎试仓",
+      "rr": 1.0,
+      "last": 7.64,
+      "lights": "green/yellow/yellow",
+      "one": "历史路径胜率约 52%（仅试仓线 50%，样本179）；净R:R约 0.87（偏紧，最多试仓）"
+    },
+    {
+      "symbol": "CRWV",
+      "bucket": "可考慮",
+      "layer": "可考慮",
+      "tier": "B",
+      "enter_ok": "谨慎试仓",
+      "rr": 1.0,
+      "last": 87.59,
+      "lights": "green/yellow/yellow",
+      "one": "历史路径胜率约 51%（仅试仓线 50%，样本180）；净R:R约 0.88（偏紧，最多试仓）"
+    }
+  ],
+  "focus_A_soft_context": [
+    "WDC",
+    "VRT",
+    "COHR",
+    "RKLB"
+  ],
+  "errors": []
+}
